@@ -1,18 +1,16 @@
 #include "power.h"
 
 #include "config.h"
+#include "servo_hw.h"
 
 namespace power {
 
 void begin() {
-  servoPowerOff();
-#if PIN_SERVO_SIGNAL >= 0
-  // Señal del servo en bajo; el pull-down externo la mantiene así en el arranque.
-  pinMode(PIN_SERVO_SIGNAL, OUTPUT);
-  digitalWrite(PIN_SERVO_SIGNAL, LOW);
-#endif
+  // Servo sin energía y señal con pull-down (servo_hw).
+  servo_hw::begin();
 #if PIN_REED >= 0
-  pinMode(PIN_REED, INPUT);
+  // El reed solo se lee en el modo DEMO_SEPARACION (para armar). Pull según config.h.
+  pinMode(PIN_REED, REED_PULLUP ? INPUT_PULLUP : INPUT);
 #endif
   // El enclavamiento (PIN_LATCH) no se maneja todavía: su lógica y polaridad las define
   // electrónica (PREGUNTAS P2). No se escribe nada en ese pin.
@@ -22,12 +20,7 @@ void begin() {
 #endif
 }
 
-void servoPowerOff() {
-#if (PIN_SERVO_POWER >= 0) && defined(SERVO_POWER_ON_LEVEL)
-  pinMode(PIN_SERVO_POWER, OUTPUT);
-  digitalWrite(PIN_SERVO_POWER, SERVO_POWER_ON_LEVEL ? LOW : HIGH);
-#endif
-}
+void servoPowerOff() { servo_hw::off(); }
 
 float batteryVolts() {
 #if PIN_BAT_ADC >= 0

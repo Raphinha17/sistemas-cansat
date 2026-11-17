@@ -70,3 +70,39 @@ def test_raw_csv(tmp_path):
     assert max(g) - min(g) < 1.5
     # El barómetro se actualiza a 25 Hz
     assert abs(sum(int(r["baro_new"]) for r in rows[:1000]) - 250) <= 2
+
+
+def _raw(**kw):
+    rows = []
+    list(S.simulate(raw_cb=rows.append, **kw))
+    return rows  # tuplas en el orden de S.RAW_COLUMNS
+
+
+def test_escenario_h_top():
+    rows = _raw(seed=1, h_top=200)
+    assert max(r[10] for r in rows) == pytest.approx(200, abs=0.5)
+
+
+def test_escenario_falsa_liberacion():
+    rows = _raw(seed=1, false_release_at=70)
+    win = [r for r in rows if 70.05 <= r[0] < 70.2]
+    assert win and all(abs(r[3]) < 0.3 for r in win)      # baja g durante la caída breve
+    vz_min = min(r[11] for r in rows if 69 < r[0] < 72)
+    assert 3.0 < vz_min < 4.0                               # 6 m/s - 0.25 s * g: no cae
+    assert max(r[10] for r in rows) == pytest.approx(450, abs=0.5)  # el vuelo sigue
+
+
+def test_escenario_fall_tilt():
+    rows = _raw(seed=1, fall_tilt=70)
+    t_fall = next(r[0] for r in rows if r[15] == "fall")
+    roll = [r[12] for r in rows if r[15] == "fall" and t_fall + 5 < r[0] < t_fall + 7]
+    assert all(55 < x < 85 for x in roll)
+    # hasta una altura: después se endereza
+    rows = _raw(seed=1, fall_tilt=60, fall_tilt_until_h=214)
+    late = [abs(r[12]) for r in rows if r[15] == "fall" and 150 < r[10] < 180]
+    assert sum(late) / len(late) < 40                       # vuelve a la oscilación normal
+
+
+def test_escenario_v_terminal():
+    rows = _raw(seed=1, v_terminal=60)
+    assert min(r[11] for r in rows) < -45

@@ -14,6 +14,14 @@ Ejemplos:
   py tools/flight_sim.py --out vuelo.bin --seed 3
   py tools/flight_sim.py --port COM5 --realtime
   py tools/flight_sim.py --fail baro --fail-at 40 --loss 10 --hex
+
+Escenarios para las pruebas de la máquina de estados (los valores por defecto no
+cambian el vuelo nominal):
+  --h-top 200                 el dron libera a 200 m (debajo del mínimo de 240 m)
+  --false-release 70          0.25 s de caída libre en el ascenso (falsa liberación)
+  --fall-tilt 70              caída libre inclinada ~70° (compuerta de 45° no se cumple)
+  --fall-tilt 60 --fall-tilt-until-h 214   inclinada hasta 214 m, luego se endereza
+  --v-terminal 60             caída más rápida (respaldo de 160 m)
 """
 from __future__ import annotations
 
@@ -57,6 +65,9 @@ DROP_FROM_MAX = 25.0
 T_FIRE_NO_BARO = 7.0        # disparo por tiempo desde la liberación (baro muerto)
 T_DEPLOY_STATE = 1.0        # duración del estado 4 (sin validar el pico de aceleración)
 
+FALSE_RELEASE_T = 0.25       # s de caída libre de la falsa liberación (--false-release)
+FALL_TILT_SIG = 5.0         # ° de oscilación cuando se fuerza la inclinación (--fall-tilt)
+
 TAU_W = 0.3                 # s, correlación de la velocidad angular simulada
 RAW_DECIM = 2               # salida cruda a 200/2 = 100 Hz (frecuencia del lazo de control)
 RAW_COLUMNS = ["t", "ax_g", "ay_g", "az_g", "gx_dps", "gy_dps", "gz_dps", "p_pa", "temp_c",
@@ -76,8 +87,18 @@ def _alt_from_p(p: float, p0: float) -> float:
 
 def simulate(seed: int = 1, fail: Optional[str] = None, fail_at: float = 30.0,
              rate: Optional[float] = None,
-             raw_cb: Optional[Callable[[tuple], None]] = None) -> Iterator[Tuple[float, T.Packet]]:
+             raw_cb: Optional[Callable[[tuple], None]] = None,
+             h_top: float = H_TOP, v_terminal: float = V_TERMINAL,
+             false_release_at: Optional[float] = None,
+             fall_tilt: Optional[float] = None,
+             fall_tilt_until_h: float = 0.0) -> Iterator[Tuple[float, T.Packet]]:
     """Genera (t, Packet) en el instante de cada transmisión (antes de aplicar pérdidas).
+
+    Escenarios (por defecto, vuelo nominal):
+      h_top: altura de liberación del dron.  v_terminal: velocidad terminal en caída libre.
+      false_release_at: instante (s) de una caída libre breve (FALSE_RELEASE_T) en el ascenso.
+      fall_tilt: inclinación (°, en roll) a la que tiende el cuerpo en caída libre, con
+      oscilación reducida (FALL_TILT_SIG); se mantiene mientras h > fall_tilt_until_h.
 
     Si se da raw_cb, se llama a 100 Hz con una tupla en el orden de RAW_COLUMNS
     (sensores crudos + verdad física), útil para probar filtros del firmware.
@@ -87,7 +108,7 @@ def simulate(seed: int = 1, fail: Optional[str] = None, fail_at: float = 30.0,
 
     p0_true = 101325.0 + rnd.uniform(-600, 600)
     acc_bias = [gauss(0, 0.01) for _ in range(3)]
-    k_fall = G / V_TERMINAL ** 2
+    k_fall = G / v_terminal ** 2
     k_chute = G / V_CHUTE ** 2
     launch_t = T_SELFTEST + T_GROUND
 
@@ -157,19 +178,22 @@ def simulate(seed: int = 1, fail: Optional[str] = None, fail_at: float = 30.0,
         # ---------- física ----------
         sig, tau = 1.0, 2.0
         yaw_rate = 0.0
+        tilt_target = 0.0
         if phys == "ground":
             if t >= launch_t:
                 phys = "ascent"
         if phys == "ascent":
-            v_target = min(V_CLIMB, math.sqrt(max(0.0, 2 * A_CLIMB * (H_TOP - h))))
+            v_target = min(V_CLIMB, math.sqrt(max(0.0, 2 * A_CLIMB * (h_top - h))))
             dv = max(-A_CLIMB * DT, min(A_CLIMB * DT, v_target - vz))
+            if false_release_at is not None and false_release_at <= t < false_release_at + FALSE_RELEASE_T:
+                dv = -G * DT  # caída libre breve (el dron cae y se recupera)
             a_up = dv / DT
             vz += dv
             h += vz * DT
             f_spec = 1.0 + a_up / G
             sig, tau, yaw_rate = 4.0, 1.5, 0.3
-            if h >= H_TOP - 0.05 and vz < 0.05:
-                h = H_TOP
+            if h >= h_top - 0.05 and vz < 0.05:
+                h = h_top
                 vz = 0.0
                 phys = "hover"
                 t_hover0 = t
@@ -192,6 +216,8 @@ def simulate(seed: int = 1, fail: Optional[str] = None, fail_at: float = 30.0,
                 sig, tau, yaw_rate = 6.0, 1.0, 90.0
             else:
                 sig, tau, yaw_rate = 30.0, 1.2, 40.0
+                if fall_tilt is not None and h > fall_tilt_until_h:
+                    sig, tilt_target = FALL_TILT_SIG, fall_tilt
             if h <= 0.0:
                 h = 0.0
                 vz = 0.0
@@ -212,7 +238,7 @@ def simulate(seed: int = 1, fail: Optional[str] = None, fail_at: float = 30.0,
             s = sw * math.sqrt(2 * DT / TAU_W)
             w_r += -w_r / TAU_W * DT + s * gauss(0, 1)
             w_p += -w_p / TAU_W * DT + s * gauss(0, 1)
-            roll += (-roll / tau + w_r) * DT
+            roll += (-(roll - tilt_target) / tau + w_r) * DT
             pitch += (-pitch / tau + w_p) * DT
         if phys != "ground":
             yaw += (yaw_rate + gauss(0, 0.3)) * DT
@@ -439,6 +465,15 @@ def main(argv=None) -> int:
     ap.add_argument("--realtime", action="store_true", help="emite a ritmo de reloj real")
     ap.add_argument("--raw-csv", help="escribe sensores crudos + verdad a 100 Hz (CSV) para "
                     "probar los filtros del firmware; si no hay --out/--port/--hex, no emite paquetes")
+    ap.add_argument("--h-top", type=float, default=H_TOP, help="altura de liberación (def. 450 m)")
+    ap.add_argument("--v-terminal", type=float, default=V_TERMINAL,
+                    help="velocidad terminal en caída libre (def. 35 m/s)")
+    ap.add_argument("--false-release", type=float, metavar="T",
+                    help="s: caída libre de %.2f s en el ascenso (falsa liberación)" % FALSE_RELEASE_T)
+    ap.add_argument("--fall-tilt", type=float, metavar="DEG",
+                    help="inclinación forzada en caída libre (roll, °)")
+    ap.add_argument("--fall-tilt-until-h", type=float, default=0.0, metavar="H",
+                    help="la inclinación forzada se mantiene mientras h > H (def. 0)")
     a = ap.parse_args(argv)
 
     if not 0 <= a.loss < 100:
@@ -460,7 +495,9 @@ def main(argv=None) -> int:
     sent = dropped = 0
     t0 = time.monotonic()
     try:
-        for t, pkt in simulate(a.seed, a.fail, a.fail_at, a.rate, raw_cb):
+        for t, pkt in simulate(a.seed, a.fail, a.fail_at, a.rate, raw_cb, h_top=a.h_top,
+                               v_terminal=a.v_terminal, false_release_at=a.false_release,
+                               fall_tilt=a.fall_tilt, fall_tilt_until_h=a.fall_tilt_until_h):
             if loss_rnd.random() * 100 < a.loss:
                 dropped += 1
                 continue

@@ -38,6 +38,11 @@ Tamaño fijo: **32 bytes**, little-endian, sin relleno.
 | 6   | fallo imu            |
 | 7   | NO-GO                |
 
+En el firmware de demostración (`DEMO_SEPARACION`, entorno `heltec_demo`) el bit 2
+(disparo) marca la separación del modo demo. El log guarda un registro en el ciclo exacto
+de la separación (el primero con ese bit); en la telemetría el bit aparece en el
+siguiente paquete (<= 200 ms).
+
 ## Salida USB del receptor (`rx_station`)
 Una línea por paquete, a 115200 baudios:
 

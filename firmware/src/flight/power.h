@@ -1,5 +1,5 @@
-// Energía: medición de la pila de 9 V, energía del servo (apagada) y enclavamiento.
-// Sin máquina de estados todavía: el servo se mantiene SIN energía siempre (SPEC).
+// Energía: medición de la pila de 9 V, estado seguro del servo al arrancar, reed y
+// enclavamiento. El servo lo maneja servo_hw según la máquina de estados.
 #pragma once
 
 #include <Arduino.h>
