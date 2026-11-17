@@ -54,3 +54,19 @@ def test_cli_loss(tmp_path):
     n_loss, n_full = out.stat().st_size // 32, full.stat().st_size // 32
     assert out.stat().st_size % 32 == 0
     assert 0.55 * n_full < n_loss < 0.85 * n_full
+
+
+def test_raw_csv(tmp_path):
+    import csv
+    out = tmp_path / "raw.csv"
+    assert S.main(["--raw-csv", str(out), "--seed", "1"]) == 0
+    rows = list(csv.DictReader(open(out)))
+    assert list(rows[0].keys()) == S.RAW_COLUMNS
+    dt = float(rows[1]["t"]) - float(rows[0]["t"])
+    assert abs(dt - 0.01) < 1e-6                       # 100 Hz
+    assert {r["fase"] for r in rows} >= {"ground", "ascent", "hover", "fall", "impact"}
+    # En tierra el giroscopio solo mide sesgo + ruido (constante en promedio)
+    g = [float(r["gx_dps"]) for r in rows[:500]]
+    assert max(g) - min(g) < 1.5
+    # El barómetro se actualiza a 25 Hz
+    assert abs(sum(int(r["baro_new"]) for r in rows[:1000]) - 250) <= 2

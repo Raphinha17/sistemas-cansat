@@ -38,6 +38,17 @@ Tamaño fijo: **32 bytes**, little-endian, sin relleno.
 | 6   | fallo imu            |
 | 7   | NO-GO                |
 
+## Salida USB del receptor (`rx_station`)
+Una línea por paquete, a 115200 baudios:
+
+```
+<HEX>,<RSSI dBm>,<SNR dB>      p. ej. 0100...59,-48.5,9.75
+ERR,<código RadioLib>,<RSSI>,<SNR>   paquete con error (CRC, etc.)
+# texto                        mensajes informativos (ignorar)
+```
+El HEX es el paquete crudo tal como llegó (normalmente 64 caracteres = 32 B); el backend
+debe verificar la longitud antes de decodificar. Formato supuesto: ver docs/PREGUNTAS.md P14.
+
 ## Notas
 - Altura máx. representable: ±3276.7 m; vz: ±327.67 m/s; aceleración: ±32.767 g; los valores se saturan al codificar.
 - Sin CRC en el paquete: LoRa ya aplica CRC de capa física.

@@ -23,7 +23,7 @@ import os
 import random
 import sys
 import time
-from typing import Iterator, Optional, Tuple
+from typing import Callable, Iterator, Optional, Tuple
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "protocol"))
 import telemetry as T  # noqa: E402
@@ -57,6 +57,11 @@ DROP_FROM_MAX = 25.0
 T_FIRE_NO_BARO = 7.0        # disparo por tiempo desde la liberación (baro muerto)
 T_DEPLOY_STATE = 1.0        # duración del estado 4 (sin validar el pico de aceleración)
 
+TAU_W = 0.3                 # s, correlación de la velocidad angular simulada
+RAW_DECIM = 2               # salida cruda a 200/2 = 100 Hz (frecuencia del lazo de control)
+RAW_COLUMNS = ["t", "ax_g", "ay_g", "az_g", "gx_dps", "gy_dps", "gz_dps", "p_pa", "temp_c",
+               "baro_new", "h_true", "vz_true", "roll_true", "pitch_true", "yaw_true", "fase"]
+
 RATES_HZ = {T.AUTOPRUEBA: 1, T.TIERRA: 1, T.ASCENSO: 2, T.CAIDA: 5,
             T.DESPLIEGUE: 5, T.DESCENSO: 5, T.ATERRIZADO: 2}
 
@@ -70,8 +75,13 @@ def _alt_from_p(p: float, p0: float) -> float:
 
 
 def simulate(seed: int = 1, fail: Optional[str] = None, fail_at: float = 30.0,
-             rate: Optional[float] = None) -> Iterator[Tuple[float, T.Packet]]:
-    """Genera (t, Packet) en el instante de cada transmisión (antes de aplicar pérdidas)."""
+             rate: Optional[float] = None,
+             raw_cb: Optional[Callable[[tuple], None]] = None) -> Iterator[Tuple[float, T.Packet]]:
+    """Genera (t, Packet) en el instante de cada transmisión (antes de aplicar pérdidas).
+
+    Si se da raw_cb, se llama a 100 Hz con una tupla en el orden de RAW_COLUMNS
+    (sensores crudos + verdad física), útil para probar filtros del firmware.
+    """
     rnd = random.Random(seed)
     gauss = rnd.gauss
 
@@ -90,6 +100,11 @@ def simulate(seed: int = 1, fail: Optional[str] = None, fail_at: float = 30.0,
     roll = pitch = yaw = 0.0
     tilt_rest = (rnd.uniform(-2, 2), rnd.uniform(-2, 2))
     roll, pitch = tilt_rest
+    w_r = w_p = 0.0
+    prev_att = (roll, pitch, yaw)
+    gyro_bias = [gauss(0, 1.0) for _ in range(3)]  # °/s, lo estima el firmware al arrancar
+    gyro = [0.0, 0.0, 0.0]
+    baro_new = False
     f_spec = 1.0  # fuerza específica vertical en g
 
     # --- sensores / estimador ---
@@ -189,13 +204,19 @@ def simulate(seed: int = 1, fail: Optional[str] = None, fail_at: float = 30.0,
             roll += (tilt_rest[0] - roll) * 0.01
             pitch += (tilt_rest[1] - pitch) * 0.01
 
-        if phys != "impact":
-            # Ornstein-Uhlenbeck para roll/pitch
-            s = sig * math.sqrt(2 * DT / tau)
-            roll += -roll / tau * DT + s * gauss(0, 1)
-            pitch += -pitch / tau * DT + s * gauss(0, 1)
-        yaw += (yaw_rate + gauss(0, 0.3)) * DT
-        yaw = (yaw + 180.0) % 360.0 - 180.0
+        if phys not in ("impact", "ground"):
+            # Velocidad angular como proceso Ornstein-Uhlenbeck (tau_w) y ángulo que
+            # regresa a 0 con tau: da actitud suave y un giroscopio físicamente coherente.
+            # Desviación estándar del ángulo ~ sig.
+            sw = sig / math.sqrt(TAU_W * tau)
+            s = sw * math.sqrt(2 * DT / TAU_W)
+            w_r += -w_r / TAU_W * DT + s * gauss(0, 1)
+            w_p += -w_p / TAU_W * DT + s * gauss(0, 1)
+            roll += (-roll / tau + w_r) * DT
+            pitch += (-pitch / tau + w_p) * DT
+        if phys != "ground":
+            yaw += (yaw_rate + gauss(0, 0.3)) * DT
+            yaw = (yaw + 180.0) % 360.0 - 180.0
 
         # ---------- sensores ----------
         r_, p_ = math.radians(roll), math.radians(pitch)
@@ -212,6 +233,24 @@ def simulate(seed: int = 1, fail: Optional[str] = None, fail_at: float = 30.0,
         if imu_dead:
             a_meas = [0.0, 0.0, 0.0]
             est_roll = est_pitch = est_yaw = 0.0
+        raw_tick = raw_cb is not None and n % RAW_DECIM == 0
+        if raw_tick:
+            # Giroscopio: velocidades de cuerpo a partir de las derivadas de Euler (ZYX)
+            # en el intervalo desde la muestra cruda anterior.
+            dtr = RAW_DECIM * DT
+            d_r = (roll - prev_att[0]) / dtr
+            d_p = (pitch - prev_att[1]) / dtr
+            d_y = ((yaw - prev_att[2] + 180.0) % 360.0 - 180.0) / dtr
+            mr = math.radians((roll + prev_att[0]) / 2)
+            mp = math.radians((pitch + prev_att[1]) / 2)
+            gyro = [d_r - d_y * math.sin(mp),
+                    d_p * math.cos(mr) + d_y * math.cos(mp) * math.sin(mr),
+                    -d_p * math.sin(mr) + d_y * math.cos(mp) * math.cos(mr)]
+            gyro = [max(-2000.0, min(2000.0, gyro[i] + gyro_bias[i] + gauss(0, 0.1)))
+                    for i in range(3)]
+            if imu_dead:
+                gyro = [0.0, 0.0, 0.0]
+            prev_att = (roll, pitch, yaw)
 
         baro_tick = t >= next_baro
         if baro_tick:
@@ -222,6 +261,11 @@ def simulate(seed: int = 1, fail: Optional[str] = None, fail_at: float = 30.0,
                 p_meas = baro_frozen_val
             else:
                 p_meas = round(_pressure(h, p0_true) + gauss(0, 1.5))
+            baro_new = True
+        if raw_tick:
+            raw_cb((t, a_meas[0], a_meas[1], a_meas[2], gyro[0], gyro[1], gyro[2],
+                    p_meas, temp_meas, int(baro_new), h, vz, roll, pitch, yaw, phys))
+            baro_new = False
 
         # ---------- estimador (alfa-beta con aceleración) ----------
         if imu_dead:
@@ -393,6 +437,8 @@ def main(argv=None) -> int:
     ap.add_argument("--baud", type=int, default=115200)
     ap.add_argument("--hex", action="store_true", help="una línea hex por paquete en vez de binario")
     ap.add_argument("--realtime", action="store_true", help="emite a ritmo de reloj real")
+    ap.add_argument("--raw-csv", help="escribe sensores crudos + verdad a 100 Hz (CSV) para "
+                    "probar los filtros del firmware; si no hay --out/--port/--hex, no emite paquetes")
     a = ap.parse_args(argv)
 
     if not 0 <= a.loss < 100:
@@ -401,11 +447,20 @@ def main(argv=None) -> int:
         ap.error("--rate debe ser > 0")
 
     loss_rnd = random.Random(a.seed + 7919)
-    sinks = _Sinks(a.out, a.port, a.baud, a.hex, to_stdout=not (a.out or a.port))
+    raw_f = open(a.raw_csv, "w", newline="") if a.raw_csv else None
+    raw_cb = None
+    if raw_f:
+        raw_f.write(",".join(RAW_COLUMNS) + "\n")
+
+        def raw_cb(row):
+            raw_f.write(",".join(x if isinstance(x, str) else f"{x:.6g}" if isinstance(x, float)
+                                 else str(x) for x in row) + "\n")
+    to_stdout = not (a.out or a.port) and (not a.raw_csv or a.hex)
+    sinks = _Sinks(a.out, a.port, a.baud, a.hex, to_stdout=to_stdout)
     sent = dropped = 0
     t0 = time.monotonic()
     try:
-        for t, pkt in simulate(a.seed, a.fail, a.fail_at, a.rate):
+        for t, pkt in simulate(a.seed, a.fail, a.fail_at, a.rate, raw_cb):
             if loss_rnd.random() * 100 < a.loss:
                 dropped += 1
                 continue
@@ -425,6 +480,8 @@ def main(argv=None) -> int:
             sinks.close()
         except OSError:
             pass
+        if raw_f:
+            raw_f.close()
     print(f"paquetes enviados={sent} perdidos={dropped}", file=sys.stderr)
     return 0
 
