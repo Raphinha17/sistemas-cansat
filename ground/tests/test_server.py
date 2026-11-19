@@ -44,9 +44,17 @@ def test_rest_estado_y_paginas(tmp_path):
         assert c.get("/static/app.js").status_code == 200
 
 
-def test_logo_marcador_de_posicion(tmp_path):
+def test_logo_marcador_de_posicion(tmp_path, monkeypatch):
     st, app = _client(tmp_path)
+    real_isfile = SV.os.path.isfile
     with app as c:
+        # Con el archivo (ground/static/logo.png está en el repositorio): se sirve el PNG
+        if real_isfile(SV.os.path.join(SV.STATIC_DIR, "logo.png")):
+            r = c.get("/logo")
+            assert r.status_code == 200 and r.headers["content-type"] == "image/png"
+        # Sin el archivo: marcador de posición que dice dónde ponerlo
+        monkeypatch.setattr(SV.os.path, "isfile",
+                            lambda p: False if p.endswith("logo.png") else real_isfile(p))
         r = c.get("/logo")
         assert r.status_code == 200 and "svg" in r.headers["content-type"]
         assert "ground/static/logo.png" in r.text

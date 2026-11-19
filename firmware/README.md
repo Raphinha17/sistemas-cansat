@@ -89,8 +89,11 @@ Parámetros en `config.h` (`DEPLOY_*`); dudas en `docs/PREGUNTAS.md` P31-P33.
 (log en hex), `BORRAR`, `MISION` (registro de NVS), `MISION_BORRAR` (borra la misión y
 reinicia), `MISION_PRUEBA` (guarda una misión FALSA en curso, para probar el reinicio en
 vuelo sin volar), `MODO [A|B|C]`, `SIM_INICIO` (entra al modo simulación, o lo reinicia de
-cero, sin depender de los sensores), `SIM_FIN`, y en `heltec_demo`/`heltec_banco`: `ARMAR`,
-`DESARMAR`. Las líneas `SIM,...` también activan el modo simulación (solo en estados 0 y 1).
+cero, sin depender de los sensores), `SIM_FIN`, `SIM_PROXIMA` (próxima línea SIM esperada),
+y en `heltec_demo`/`heltec_banco`: `ARMAR`, `DESARMAR`. Las líneas `SIM,...` también activan
+el modo simulación (solo en estados 0 y 1). Con CRC (`SIM,...*HHHH`, como las manda
+`tools/sim_serial.py`) la placa descarta las dañadas o fuera de orden y pide `SIM_REPITE t_ms`
+(`docs/sim_input.md`, "Integridad").
 
 **Placa sin sensores** (banco con solo las Heltec): IMU y barómetro fallan en la
 autoprueba, la placa llega a TIERRA con NO-GO y fallos de ambos sensores (banderas 0xE0) y

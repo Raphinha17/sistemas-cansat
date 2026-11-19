@@ -233,3 +233,8 @@
 // ---------------------------------------------------------------------------
 #define SIM_QUEUE_LEN 32
 #define SIM_LINEA_MAX 160
+// Búfer de recepción del puerto serie (UART0 por el CP2102, 115200 baudios). 8 KB = ~1.2 s
+// de líneas SIM (~6.9 kB/s): cubre las pausas de la tarea comms (LittleFS, radio). Los
+// bytes que llegan mientras la flash tiene la caché apagada dependen de la FIFO de 128 B
+// y pueden perderse: eso lo resuelven el CRC y el reenvío (docs/sim_input.md).
+#define SERIAL_RX_BUF 8192

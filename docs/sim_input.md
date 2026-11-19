@@ -11,11 +11,16 @@ Implementación: `firmware/lib/flight_core/sim_input.cpp` (formato, probado en n
 ## Formato de línea
 
 Una línea de texto ASCII por ciclo del lazo de control (10 ms a 100 Hz), terminada en
-`\n` (se acepta `\r\n`), a 115200 baudios por el puerto USB de la placa:
+`\n` (se acepta `\r\n`), a 115200 baudios por el puerto USB de la placa (UART0 a través
+del puente CP2102):
 
 ```
-SIM,t_ms,ax,ay,az,gx,gy,gz,p_pa,temp_c
+SIM,t_ms,ax,ay,az,gx,gy,gz,p_pa,temp_c*CRC
 ```
+
+`*CRC` es opcional (ver **Integridad**): `*` y 4 dígitos hexadecimales del
+CRC-16/CCITT-FALSE de todo lo anterior al `*` (polinomio 0x1021, valor inicial 0xFFFF; en
+Python `binascii.crc_hqx(texto, 0xFFFF)`). `tools/sim_serial.py` siempre lo manda.
 
 | Campo | Unidad | Notas |
 |---|---|---|
@@ -61,8 +66,10 @@ SIM,40010,0.02,0.01,1.0,0.4,-1.2,0.1,nan,22.1   <- barómetro fallido
   El barómetro se lee en una de cada 4 líneas (25 Hz), igual que el sensor real.
 - La placa guarda hasta 32 líneas en cola; si la PC manda más rápido de lo que se
   consume, las sobrantes se descartan (`STAT` → `sim_descartadas`).
-- Ancho de banda: una línea típica mide ~70 caracteres; 100 líneas/s ≈ 7 kB/s, dentro de
-  los ~11.5 kB/s de 115200 baudios. No conviene ir a más de ~1.3× tiempo real.
+- Ancho de banda: una línea de `sim_serial.py` mide 64 caracteres en promedio (70 como
+  máximo) más 5 del CRC: 100 líneas/s ≈ 6.9 kB/s, el 60 % de los 11.52 kB/s de 115200
+  baudios (8N1). El vuelo cabe a tiempo real; no conviene ir a más de ~1.3× (`--speed`).
+  El búfer de recepción de la placa es de 8 KB (`SERIAL_RX_BUF`, ~1.2 s de líneas).
 - **No se escribe la NVS** en este modo: un ensayo en banco no deja una misión "en curso"
   para el siguiente arranque. Por lo mismo, el reinicio en vuelo no se prueba así (está
   cubierto por las pruebas native).
@@ -76,6 +83,50 @@ SIM,40010,0.02,0.01,1.0,0.4,-1.2,0.1,nan,22.1   <- barómetro fallido
   cambio de estado y `# DISPARO t_ms=.. h=.. vz=.. h_despliegue=..` al disparar. Un estado que
   dura un solo ciclo (CAÍDA en el modo C) puede no llegar a imprimirse.
 
+## Integridad: CRC, huecos y reenvío
+
+**Por qué.** En la prueba (b) de `docs/PRUEBAS_SISTEMAS.md` (19-nov-2026) la placa recibió
+17 318 de 19 391 líneas, 137 inválidas, y disparó a T+45 s. El puerto serie pierde bloques
+de bytes. Causa más probable (deducida del código, no medida en la placa; PREGUNTAS P49):
+la tarea comms escribe el log en LittleFS (cada segundo, y cada escritura tras
+un `flush` copia el último bloque de 4 KB a uno nuevo) y mientras la flash está ocupada
+la caché está apagada y la interrupción de la UART no corre: solo caben 128 B en la FIFO
+(~18 ms de líneas). Además el búfer de recepción del núcleo Arduino era de 256 B. Un
+bloque perdido une la **cabeza de una línea con la cola de otra**; si el corte cae en el
+mismo campo de las dos, la línea pegada tiene 9 campos y pasa el formato con valores
+falsos (p. ej. `...,10` + `104,24.00` → 10 104 Pa ≈ 16 km). El Kalman salta, la liberación
+se detecta por "h bajo h_max − 25 m" y el disparo es inmediato (vz = +130 m/s da
+h_disp = 265 m). Los huecos solos (líneas que faltan) también rompen la suposición de
+10 ms entre líneas, pero sin valores falsos producen errores pequeños (con 10 % de
+líneas faltantes, 1.2 m en h_despliegue y los estados en orden). `pio test -e native`
+(`test_sim_link`) reproduce las dos cosas con un enlace que pierde bloques de bytes.
+
+**Qué hace la placa** (`SimLink` en `firmware/lib/flight_core/sim_input.cpp`):
+- Desde la primera línea con CRC correcto, la sesión es **estricta**: solo pasan al lazo
+  las líneas con CRC correcto **y** `t_ms` igual al esperado (anterior + 10 ms).
+- Línea dañada (CRC, formato, más de 160 caracteres, fragmento sin `SIM,` o sin CRC) o
+  adelantada (faltan líneas antes): se descarta y la placa responde
+  `SIM_REPITE <t_ms esperado>`. Mientras no llegue, no lo repite antes de 250 ms.
+- Línea repetida (`t_ms` ya procesado, tras un reenvío): se descarta sin aviso.
+- `SIM_PROXIMA` responde `SIM_PROXIMA <t_ms esperado>` (`-1` si aún no llegó ninguna).
+- Así el lazo procesa **exactamente** las líneas del CSV, en orden, y dt = 10 ms es exacto
+  (no hace falta tocar los filtros ni usar el tiempo de llegada). El tiempo de la
+  máquina de estados sigue siendo el `t_ms` de la línea.
+- Sin CRC (líneas escritas a mano, `--sin-crc`): como antes, pasan todas las de formato
+  válido; los huecos solo se cuentan.
+- `STAT`: `sim_rx` aceptadas, `sim_invalidas`, `sim_huecos` (líneas adelantadas),
+  `sim_repetidas`, `sim_repite` (pedidos de reenvío), `sim_crc=1` si la sesión es estricta.
+
+**Qué hace la PC** (`sim_serial.py`): al recibir `SIM_REPITE t` vuelve a esa línea y sigue
+a tiempo real desde ahí (sin ráfagas); al terminar pregunta `SIM_PROXIMA` y reenvía lo que
+falte. Cada pérdida retrasa el resto del envío: con ~1 pérdida por segundo el vuelo de
+3 min 14 s tarda ~15 % más en la PC. Los tiempos de la simulación (`t_ms`, T+ de la
+estación) no cambian.
+
+**Baud rate.** No se sube: el caudal es el 60 % de 115200 y el problema son las pausas de
+la flash, que con más baudios serían iguales (a mayor velocidad, una ráfaga llena antes
+la FIFO de 128 B). Además `monitor_speed`, el monitor y `rx_station` siguen a 115200.
+
 ## Prueba en banco con `tools/sim_serial.py`
 
 ```
@@ -83,8 +134,12 @@ py tools/flight_sim.py --raw-csv vuelo.csv --seed 1
 py tools/sim_serial.py --csv vuelo.csv --port COM5 --modo A --fin
 ```
 
-`sim_serial.py` manda `SIM_INICIO` (y `MODO` con `--modo`) y luego convierte cada fila del CSV crudo (100 Hz) en una línea `SIM,...`, la
-envía a tiempo real y muestra lo que imprime la placa. Las filas con el IMU en ceros
+`sim_serial.py` manda `SIM_INICIO` (y `MODO` con `--modo`) y luego convierte cada fila del CSV crudo (100 Hz) en una línea `SIM,...*CRC`, la
+envía a tiempo real, atiende los `SIM_REPITE` y muestra lo que imprime la placa. Al final
+pide `SIM_PROXIMA` y `STAT`, e imprime `lineas del CSV=... enviadas=... (reenviadas=...)`
+y `OK: la placa recibio las N lineas en orden` (código de salida 0) o `ERROR: ...`
+(código 2). Con `--sin-crc` manda el formato anterior (para un firmware viejo; sin
+reenvío ni confirmación). Las filas con el IMU en ceros
 (`flight_sim.py --fail imu`) se mandan con los campos del IMU vacíos. Con `--dry-run`
 solo escribe las líneas, sin placa. Escenarios útiles: ver el encabezado de
 `tools/flight_sim.py` (`--mode B`, `--mode C`, `--fail baro`, `--fall-tilt 70`,

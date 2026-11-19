@@ -423,6 +423,39 @@ ni el vuelo real. Para el servo sin conectar, la secuencia sin confirmación dur
 (1 s + 2 × (0.3 s + 1 s)): es lo esperado en las pruebas (h) y (g). La guía es
 `docs/PRUEBAS_SISTEMAS.md`.
 
+**P49. Pérdida de líneas en el modo simulación (prueba (b), 19-nov-2026).** Con
+`heltec_banco` en la placa, `sim_serial.py` mandó 19 391 líneas y la placa aceptó 17 318
+(137 inválidas, ~1 936 sin contar): se perdió ~10 % del flujo, del orden de un bloque por
+segundo. Algunas líneas "pegadas" (cabeza de una + cola de otra, 9 campos) pasaron el
+formato con presiones falsas: el Kalman saltó (~1000 m en la estación), la liberación se
+detectó por h < h_max − 25 m a T+45 s y el disparo fue inmediato con vz = +130 m/s.
+- Medido (PC): 64 B por línea en promedio (máx. 70) + 5 del CRC → 6.9 kB/s a 100 líneas/s,
+  el 60 % de 115200 baudios 8N1 (11.52 kB/s). El baud rate **no** es el cuello de botella.
+  La placa usa UART0 por el CP2102 (sin USB-CDC en `heltec_wifi_lora_32_V3`); el núcleo
+  Arduino 2.0.17 deja 256 B de búfer de recepción y su interrupción de UART no está en
+  IRAM (no corre mientras la flash escribe/borra; solo quedan los 128 B de la FIFO).
+- SUPOSICIÓN (no medida): las pérdidas ocurren mientras comms escribe el log en LittleFS
+  (`flush` cada 1 s; tras cada `flush` la siguiente escritura copia el último bloque de
+  4 KB a uno nuevo: borrado + programación con la caché apagada). Encaja con ~1 pérdida
+  por segundo. Para confirmarlo: con el firmware nuevo, `sim_repite` en `STAT` debe ser
+  ≈ 1 por segundo de vuelo (~190-250). Si fuera mucho mayor, hay otra causa.
+- Ajuste (solo modo simulación; el vuelo no cambia): CRC-16 por línea, la placa descarta
+  líneas dañadas o fuera de orden y pide `SIM_REPITE`; `sim_serial.py` reenvía y al final
+  verifica con `SIM_PROXIMA`. Búfer de recepción de 8 KB (`SERIAL_RX_BUF`; en vuelo solo
+  recibe comandos, no cambia nada). Detalle: `docs/sim_input.md`, "Integridad".
+- Se descartó usar un dt variable (desde `t_ms`) en los filtros: cambiaría el código de
+  vuelo y no arregla las líneas pegadas. Con el reenvío no hay huecos y dt = 10 ms es exacto.
+- Se descartó subir a 460800/921600: no es el cuello de botella, la FIFO se llenaría igual
+  (o antes, en ráfagas) durante la pausa de la flash, y obliga a cambiar `monitor_speed`.
+- Duda: ¿se quiere conservar el log en LittleFS durante la simulación? Desactivarlo en ese
+  modo quitaría las pérdidas, pero la prueba dejaría de ejercitar el log.
+- Duda (vuelo real, sin cambiar aquí): en CAÍDA `h_disp = DEPLOY_ALT + |vz|·0.5` usa |vz|
+  aunque vz sea positiva (solo pasa con un estimador corrompido, como en esta corrida:
+  h_disp = 265 m y disparo inmediato). ¿Se quiere ignorar vz > 0 en ese cálculo?
+- Duda: el vuelo en la PC tarda ~15 % más que el tiempo real por los reenvíos (los
+  tiempos de simulación no cambian). Si se necesitara tiempo real estricto (p. ej. para
+  ver el servo a su ritmo exacto), habría que reenviar más rápido que 1×.
+
 ## Resueltas
 
 **P2. Reed y enclavamiento (DECISIÓN DE HARDWARE).** Ya no se usa interruptor reed ni

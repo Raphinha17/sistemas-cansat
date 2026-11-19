@@ -14,16 +14,30 @@ Ejemplos:
 
 Antes de las líneas manda SIM_INICIO (la placa entra al modo simulación y reinicia de cero,
 aunque no tenga sensores o venga de otro vuelo simulado); --no-inicio lo omite.
+
+Integridad (docs/sim_input.md): cada línea lleva "*HHHH" (CRC-16/CCITT-FALSE). La placa
+descarta las dañadas o fuera de orden y pide "SIM_REPITE t_ms"; este programa retrocede a
+esa línea y sigue a tiempo real desde ahí. Al final pregunta SIM_PROXIMA y reenvía lo que
+falte, así la placa procesa todas las líneas del CSV, en orden y sin huecos. Termina con
+código 0 solo si la placa lo confirma. --sin-crc manda el formato anterior (firmware
+viejo; sin reenvío ni confirmación).
 """
 from __future__ import annotations
 
 import argparse
+import binascii
 import csv
+import re
 import sys
 import time
-from typing import Dict, Iterable, Iterator, Optional
+from dataclasses import dataclass
+from typing import Callable, Dict, Iterable, Iterator, List, Optional
 
 IMU_COLS = ("ax_g", "ay_g", "az_g", "gx_dps", "gy_dps", "gz_dps")
+
+REPITE_RE = re.compile(r"^SIM_REPITE (\d+)\s*$")
+PROXIMA_RE = re.compile(r"^SIM_PROXIMA (-?\d+)\s*$")
+REWIND_DEDUP_S = 0.15  # ignora el mismo SIM_REPITE si ya se retrocedió hace menos que esto
 
 
 def _num(x: float, nd: int) -> str:
@@ -32,7 +46,7 @@ def _num(x: float, nd: int) -> str:
 
 
 def format_line(row: Dict[str, str]) -> str:
-    """Una fila del CSV crudo -> línea SIM,t_ms,ax,ay,az,gx,gy,gz,p_pa,temp_c.
+    """Una fila del CSV crudo -> línea SIM,t_ms,ax,ay,az,gx,gy,gz,p_pa,temp_c (sin CRC).
 
     flight_sim.py marca el IMU muerto con ceros en las seis columnas: se mandan vacías
     (lectura fallida), igual que haría la placa con un error de I2C.
@@ -48,33 +62,148 @@ def format_line(row: Dict[str, str]) -> str:
     return ",".join(["SIM", str(t_ms)] + imu_txt + [p, temp])
 
 
-def lines_from_csv(path: str) -> Iterator[str]:
+def add_crc(body: str) -> str:
+    """Agrega *HHHH: CRC-16/CCITT-FALSE de todo el texto (igual que simCrc16 en la placa)."""
+    return f"{body}*{binascii.crc_hqx(body.encode('ascii'), 0xFFFF):04X}"
+
+
+def line_t_ms(line: str) -> int:
+    return int(line.split(",", 2)[1])
+
+
+def lines_from_csv(path: str, crc: bool = True) -> Iterator[str]:
     with open(path, newline="") as f:
         for row in csv.DictReader(f):
-            yield format_line(row)
+            body = format_line(row)
+            yield add_crc(body) if crc else body
+
+
+class LineReader:
+    """Lee lo que manda la placa sin bloquear.
+
+    (readline() con timeout esperaba hasta 50 ms a que terminara una línea y luego se
+    mandaban varias líneas SIM de golpe.)"""
+
+    def __init__(self, ser):
+        self.ser = ser
+        self.buf = b""
+
+    def poll(self) -> List[str]:
+        n = self.ser.in_waiting
+        if n:
+            self.buf += self.ser.read(n)
+        if b"\n" not in self.buf:
+            return []
+        *done, self.buf = self.buf.split(b"\n")
+        return [d.decode(errors="replace").rstrip("\r") for d in done]
+
+
+@dataclass
+class SendResult:
+    enviadas: int = 0          # líneas escritas, con los reenvíos
+    pedidos: int = 0           # SIM_REPITE recibidos
+    retrocesos: int = 0        # veces que se volvió atrás (SIM_REPITE o SIM_PROXIMA)
+    proxima: Optional[int] = None   # última respuesta a SIM_PROXIMA
+    confirmado: bool = False   # la placa recibió hasta la última línea
 
 
 def send(lines: Iterable[str], ser, speed: float = 1.0, period_s: float = 0.01,
-         echo=None) -> int:
-    """Envía las líneas a ritmo de period_s/speed. Devuelve cuántas envió."""
-    n = 0
-    t0 = time.perf_counter()
-    for line in lines:
-        target = t0 + n * period_s / speed
-        while True:
-            now = time.perf_counter()
-            if ser is not None and ser.in_waiting:
-                msg = ser.readline().decode(errors="replace").rstrip()
-                if msg and echo:
-                    echo(msg)
-            if now >= target:
+         echo: Optional[Callable[[str], None]] = None, verify: bool = True,
+         wait_s: float = 1.0, max_consultas: int = 5,
+         clock=time.perf_counter, sleep=time.sleep) -> SendResult:
+    """Envía las líneas a ritmo de period_s/speed atendiendo los pedidos de reenvío.
+
+    Tras un SIM_REPITE se retrocede a esa línea y el ritmo sigue desde ahí (sin ráfagas:
+    el vuelo tarda un poco más que el tiempo real). Con verify, al final pregunta
+    SIM_PROXIMA hasta que la placa confirma la última (máx. max_consultas sin respuesta).
+    """
+    lines = list(lines)
+    res = SendResult()
+    if not lines:
+        return res
+    t_of = [line_t_ms(x) for x in lines]
+    idx = {t: i for i, t in enumerate(t_of)}
+    reader = LineReader(ser) if ser is not None else None
+    step = period_s / speed
+    i = 0
+    nxt = clock()
+    last_rw = (None, -1.0)
+
+    def rewind(j: int) -> None:
+        nonlocal i, nxt
+        i = j
+        nxt = clock()
+        res.retrocesos += 1
+
+    def pump() -> Optional[int]:
+        """Atiende los mensajes de la placa; devuelve la respuesta a SIM_PROXIMA si llegó."""
+        nonlocal last_rw
+        prox = None
+        if reader is None:
+            return None
+        for msg in reader.poll():
+            m = REPITE_RE.match(msg)
+            if m:
+                res.pedidos += 1
+                t = int(m.group(1))
+                j = idx.get(t)
+                now = clock()
+                if (j is not None and j < i
+                        and not (last_rw[0] == t and now - last_rw[1] < REWIND_DEDUP_S)):
+                    last_rw = (t, now)
+                    rewind(j)
+                continue
+            m = PROXIMA_RE.match(msg)
+            if m:
+                prox = int(m.group(1))
+                continue
+            if msg and echo:
+                echo(msg)
+        return prox
+
+    consultas = 0
+    while True:
+        while i < len(lines):
+            while True:
+                pump()
+                now = clock()
+                if now >= nxt:
+                    break
+                sleep(min(0.002, nxt - now))
+            if ser is not None:
+                ser.write((lines[i] + "\n").encode())
+            i += 1
+            res.enviadas += 1
+            nxt += step
+            now = clock()
+            if now - nxt > 3 * step:
+                nxt = now  # la PC se atrasó: sigue desde ahora, sin mandar de golpe
+        if not verify or ser is None:
+            break
+        # Fin del CSV: ¿la placa recibió hasta la última línea?
+        ser.write(b"SIM_PROXIMA\n")
+        t_end = clock() + wait_s
+        prox = None
+        while prox is None and i >= len(lines) and clock() < t_end:
+            prox = pump()
+            if prox is None:
+                sleep(0.005)
+        if i < len(lines):
+            continue  # llegó un SIM_REPITE: reenviar desde ahí
+        if prox is None:
+            consultas += 1
+            if consultas >= max_consultas:
                 break
-            time.sleep(min(0.002, target - now))
-        data = (line + "\n").encode()
-        if ser is not None:
-            ser.write(data)
-        n += 1
-    return n
+            continue
+        res.proxima = prox
+        if prox > t_of[-1]:
+            res.confirmado = True
+            break
+        j = idx.get(prox, 0 if prox < t_of[0] else None)
+        if j is None:
+            break  # la placa espera una línea que no está en el CSV
+        rewind(j)
+    return res
 
 
 def prepare(ser, modo: Optional[str] = None, wait_s: float = 0.4, echo=None) -> list:
@@ -109,14 +238,17 @@ def main(argv: Optional[list] = None) -> int:
                     help="s de espera tras abrir el puerto (por si la placa se reinicia; def. 2)")
     ap.add_argument("--no-inicio", action="store_true",
                     help="no manda SIM_INICIO (la primera línea SIM activa el modo)")
+    ap.add_argument("--sin-crc", action="store_true",
+                    help="formato anterior, sin CRC ni reenvío (firmware viejo)")
     a = ap.parse_args(argv)
     if a.speed <= 0:
         ap.error("--speed debe ser > 0")
+    crc = not a.sin_crc
 
     if a.dry_run:
         out = open(a.out, "w") if a.out else sys.stdout
         n = 0
-        for line in lines_from_csv(a.csv):
+        for line in lines_from_csv(a.csv, crc):
             out.write(line + "\n")
             n += 1
         if out is not sys.stdout:
@@ -128,6 +260,7 @@ def main(argv: Optional[list] = None) -> int:
         ap.error("falta --port (o --dry-run)")
     import serial  # pyserial, solo si se usa el puerto
 
+    lines = list(lines_from_csv(a.csv, crc))
     # DTR/RTS en bajo antes de abrir: así abrir el puerto no reinicia la placa (CP210x).
     ser = serial.Serial()
     ser.port, ser.baudrate, ser.timeout = a.port, a.baud, 0.05
@@ -145,7 +278,9 @@ def main(argv: Optional[list] = None) -> int:
             prepare(ser, a.modo, echo=echo)
         elif a.modo:
             ap.error("--modo necesita SIM_INICIO (quita --no-inicio)")
-        n = send(lines_from_csv(a.csv), ser, a.speed, echo=echo)
+        t_send = time.time()
+        res = send(lines, ser, a.speed, echo=echo, verify=crc)
+        dur = time.time() - t_send
         ser.write(b"STAT\n")           # resumen final: disparo, intentos del servo, etc.
         t_end = time.time() + 1.5
         while time.time() < t_end:
@@ -155,8 +290,20 @@ def main(argv: Optional[list] = None) -> int:
         if a.fin:
             ser.write(b"SIM_FIN\n")
             time.sleep(0.3)
-    print(f"lineas enviadas={n}", file=sys.stderr)
-    return 0
+    sim_s = len(lines) * 0.01 / a.speed
+    print(f"lineas del CSV={len(lines)} enviadas={res.enviadas} "
+          f"(reenviadas={res.enviadas - len(lines)}) pedidos_de_reenvio={res.pedidos} "
+          f"retrocesos={res.retrocesos} duracion={dur:.1f} s (tiempo real {sim_s:.1f} s)",
+          file=sys.stderr)
+    if not crc:
+        return 0
+    if res.confirmado:
+        print(f"OK: la placa recibio las {len(lines)} lineas en orden "
+              f"(SIM_PROXIMA={res.proxima})", file=sys.stderr)
+        return 0
+    print(f"ERROR: la placa no confirmo todas las lineas (SIM_PROXIMA={res.proxima}). "
+          "Si el firmware es anterior al CRC, usa --sin-crc o actualizalo.", file=sys.stderr)
+    return 2
 
 
 if __name__ == "__main__":

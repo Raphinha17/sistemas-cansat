@@ -34,6 +34,7 @@
 //   MODO          muestra el modo de despliegue; MODO A|B|C lo cambia (estados 0 y 1)
 //   SIM_INICIO    entra al modo simulación (o lo reinicia de cero) sin esperar sensores
 //   SIM_FIN       sale del modo simulación (vuelve a los sensores y recalibra)
+//   SIM_PROXIMA   responde "SIM_PROXIMA t_ms": próxima línea SIM esperada (sim_serial.py)
 //   MISION_PRUEBA guarda en NVS una misión en curso FALSA (para probar el reinicio en vuelo)
 //   ARMAR         (solo DEMO_SEPARACION) arma (o re-arma) la cuenta regresiva del servo
 //   DESARMAR      (solo DEMO_SEPARACION) cancela la cuenta regresiva
@@ -83,7 +84,8 @@ static volatile uint8_t pub_demo = 0;              // 0 sin armar, 1 cuenta, 2 d
 // Estadísticas (escritas por control, leídas por comms solo para diagnóstico)
 static volatile uint32_t st_cycles = 0, st_overruns = 0, st_max_us = 0;
 static volatile uint32_t st_log_drops = 0, st_imu_err = 0, st_baro_err = 0;
-static volatile uint32_t st_sim_rx = 0, st_sim_drops = 0, st_sim_bad = 0;
+static volatile uint32_t st_sim_drops = 0;
+static SimLink sim_link;  // integridad de las líneas SIM (solo la usa comms)
 
 static bool boot_recovered = false;
 static MissionRecord boot_rec;
@@ -291,26 +293,37 @@ static void printMode(DeployMode m) {
                   deployModeChar(m), p.release_min_m, p.deploy_alt_m, p.backup_alt_m);
 }
 
+static void sendResendRequest() {
+  uint32_t t;
+  if (sim_link.takeResend(t)) Serial.printf("SIM_REPITE %lu\n", (unsigned long)t);
+}
+
 static void handleSim(const char *line) {
-  CoreInput in;
-  if (!parseSimLine(line, in)) {
-    st_sim_bad++;
-    return;
-  }
+  const uint32_t now = millis();
   if (!sim_mode && !req_sim_on) {
     // Solo en tierra: nunca se entra en este modo con la misión en curso.
-    if (pub_state > ST_TIERRA) {
-      st_sim_bad++;
+    CoreInput tmp;
+    if (pub_state > ST_TIERRA || !parseSimLine(line, tmp)) {
+      sim_link.reject(now);  // fuera del modo simulación solo se cuenta (sin reenvío)
       return;
     }
     req_sim_on = true;
+    sim_link.reset();
     Serial.println("# SIM: modo simulacion activado (sensores ignorados, sin NVS)");
   }
-  st_sim_rx++;
-  if (xQueueSend(sim_queue, &in, 0) != pdTRUE) st_sim_drops++;
+  if (uxQueueSpacesAvailable(sim_queue) == 0) {
+    // Cola llena (la PC manda más rápido de lo que se procesa): la línea se pierde y, en
+    // modo estricto, la siguiente pide el reenvío.
+    st_sim_drops++;
+    return;
+  }
+  CoreInput in;
+  if (sim_link.feed(line, now, in) == SimLink::ACEPTADA) xQueueSend(sim_queue, &in, 0);
+  sendResendRequest();
 }
 
-static void handleCommand(const String &cmd) {
+// Devuelve false si el texto no es un comando conocido.
+static bool handleCommand(const String &cmd) {
   if (cmd == "TX1") {
     tx_test = false;
     Serial.println("OK TX segun el estado");
@@ -339,9 +352,12 @@ static void handleCommand(const String &cmd) {
     Serial.printf("log=%u/%u B descartados=%lu nvs_escrituras=%lu\n",
                   (unsigned)logger::sizeBytes(), (unsigned)logger::capacityBytes(),
                   (unsigned long)st_log_drops, (unsigned long)mission_store::writes());
-    Serial.printf("sim_rx=%lu sim_descartadas=%lu sim_invalidas=%lu\n",
-                  (unsigned long)st_sim_rx, (unsigned long)st_sim_drops,
-                  (unsigned long)st_sim_bad);
+    Serial.printf("sim_rx=%lu sim_descartadas=%lu sim_invalidas=%lu sim_huecos=%lu "
+                  "sim_repetidas=%lu sim_repite=%lu sim_crc=%u\n",
+                  (unsigned long)sim_link.accepted(), (unsigned long)st_sim_drops,
+                  (unsigned long)sim_link.invalid(), (unsigned long)sim_link.gaps(),
+                  (unsigned long)sim_link.duplicates(), (unsigned long)sim_link.resends(),
+                  sim_link.strict() ? 1u : 0u);
   } else if (cmd == "DUMP") {
     logger::dump(Serial);
   } else if (cmd == "BORRAR") {
@@ -381,6 +397,7 @@ static void handleCommand(const String &cmd) {
       Serial.println("ERR hay una mision en curso; MISION_BORRAR y reiniciar la placa");
     } else {
       req_sim_on = true;
+      sim_link.reset();
       pub_state = ST_AUTOPRUEBA;
       Serial.println("OK SIM_INICIO: modo simulacion (sensores ignorados, sin NVS); "
                      "manda lineas SIM,...");
@@ -399,8 +416,15 @@ static void handleCommand(const String &cmd) {
                            "debe decir # REINICIO EN VUELO. Para quitarla: MISION_BORRAR"
                          : "ERR no se pudo guardar en NVS");
     }
+  } else if (cmd == "SIM_PROXIMA") {
+    // Para sim_serial.py al terminar: si faltan las últimas líneas, las reenvía.
+    if (sim_link.hasNext())
+      Serial.printf("SIM_PROXIMA %lu\n", (unsigned long)sim_link.next());
+    else
+      Serial.println("SIM_PROXIMA -1");
   } else if (cmd == "SIM_FIN") {
     req_sim_off = true;
+    sim_link.reset();
     Serial.println("OK fin del modo simulacion (recalibrando con sensores)");
   } else if (cmd == "ARMAR" || cmd == "DESARMAR") {
     if (!core.demoEnabled()) {
@@ -412,11 +436,16 @@ static void handleCommand(const String &cmd) {
       req_demo_disarm = true;
       Serial.println("OK desarmado");
     }
-  } else if (cmd.length()) {
-    Serial.println("Comandos: TX1 TX5 STAT DUMP BORRAR MISION MISION_BORRAR MISION_PRUEBA "
-                   "MODO [A|B|C] SIM_INICIO SIM_FIN ARMAR DESARMAR | lineas SIM,... "
-                   "(docs/sim_input.md)");
+  } else {
+    return false;
   }
+  return true;
+}
+
+static void printHelp() {
+  Serial.println("Comandos: TX1 TX5 STAT DUMP BORRAR MISION MISION_BORRAR MISION_PRUEBA "
+                 "MODO [A|B|C] SIM_INICIO SIM_FIN SIM_PROXIMA ARMAR DESARMAR | lineas SIM,... "
+                 "(docs/sim_input.md)");
 }
 
 static void commsTask(void *) {
@@ -483,7 +512,14 @@ static void commsTask(void *) {
     while (Serial.available()) {
       const char c = (char)Serial.read();
       if (c == '\n' || c == '\r') {
-        if (len && !overflow) {
+        const bool sim = sim_mode || req_sim_on;
+        if (len && overflow) {
+          // Línea demasiado larga (en simulación: varias líneas pegadas por bytes perdidos).
+          if (sim) {
+            sim_link.reject(millis());
+            sendResendRequest();
+          }
+        } else if (len) {
           line[len] = 0;
           if (strncmp(line, "SIM,", 4) == 0) {
             handleSim(line);
@@ -491,7 +527,15 @@ static void commsTask(void *) {
             String cmd(line);
             cmd.trim();
             cmd.toUpperCase();
-            handleCommand(cmd);
+            if (cmd.length() && !handleCommand(cmd)) {
+              if (sim) {
+                // Fragmento de una línea SIM que perdió el inicio: inválida, sin la ayuda.
+                sim_link.reject(millis());
+                sendResendRequest();
+              } else {
+                printHelp();
+              }
+            }
           }
         }
         len = 0;
@@ -513,6 +557,10 @@ void setup() {
   pinMode(PIN_LED_PLACA, OUTPUT);
   digitalWrite(PIN_LED_PLACA, LOW);
 #endif
+  // Búfer de recepción grande (antes de begin): en el modo simulación llegan ~7 kB/s y
+  // comms puede estar ocupada decenas de ms (LittleFS); con los 256 B por defecto del
+  // núcleo Arduino se perdían bytes. No cambia nada del vuelo.
+  Serial.setRxBufferSize(SERIAL_RX_BUF);
   Serial.begin(115200);
   delay(200);
 #ifdef DEMO_SEPARACION

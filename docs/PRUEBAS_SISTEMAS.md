@@ -4,7 +4,7 @@ Guía paso a paso, para **Windows PowerShell**, de las pruebas de sistema que se
 con solo **dos placas Heltec WiFi LoRa 32 V3**, sin MPU6500, BMP280 ni servo. El firmware
 de vuelo se alimenta con el **modo simulación por serial** (`docs/sim_input.md`): una PC
 manda vuelos de `tools/flight_sim.py` y la placa los procesa como si vinieran de los
-sensores. Dudas y supuestos: `docs/PREGUNTAS.md` (P44 a P48).
+sensores. Dudas y supuestos: `docs/PREGUNTAS.md` (P44 a P49).
 
 ## 0. Qué se prueba y qué no
 
@@ -139,9 +139,29 @@ Con la estación abierta y el monitor de la placa A **cerrado**:
 ```
 `sim_serial.py` manda `SIM_INICIO`, `MODO A` y las ~19 400 líneas a tiempo real; imprime lo
 que dice la placa con los segundos **de la PC** desde que abrió el puerto (`[ 116.20 s] <
-# DISPARO ...`, unos 3 s más que el tiempo de simulación) y al final pide `STAT`. Los
-tiempos de la simulación (`t_ms` de los mensajes de la placa y T+ de la estación) empiezan
-en 0 con la primera línea. **No** cierres ni toques la placa durante el vuelo.
+# DISPARO ...`, unos 3 s más que el tiempo de simulación **más** lo que retrasen los
+reenvíos) y al final pide `STAT`. Los tiempos de la simulación (`t_ms` de los mensajes de
+la placa y T+ de la estación) empiezan en 0 con la primera línea y **no** cambian con los
+reenvíos. **No** cierres ni toques la placa durante el vuelo.
+
+**Integridad del enlace (desde el 19-nov-2026).** El puerto serie de la placa pierde bloques
+de bytes (~1 por segundo, mientras la flash guarda el log): en la primera corrida de la
+prueba (b) se perdieron ~1 900 líneas y algunas llegaron "pegadas" con valores falsos, lo
+que produjo un disparo a T+45 s. Ahora cada línea lleva CRC; la placa descarta las dañadas
+o fuera de orden y pide `SIM_REPITE`, y `sim_serial.py` las reenvía (detalles:
+`docs/sim_input.md`, "Integridad"). **Requiere el firmware nuevo** (sube otra vez
+`heltec_banco`). Al final de **cada** vuelo simulado, `sim_serial.py` debe imprimir:
+```
+lineas del CSV=19391 enviadas=19xxx (reenviadas=...) pedidos_de_reenvio=... retrocesos=... duracion=...
+OK: la placa recibio las 19391 lineas en orden (SIM_PROXIMA=193920)
+```
+y el `STAT` final, en su última línea, `sim_rx=` **igual** a las líneas del CSV,
+`sim_descartadas=0` y `sim_crc=1`. `sim_invalidas`, `sim_huecos`, `sim_repetidas` y
+`sim_repite` pueden ser > 0 (son las pérdidas detectadas y reenviadas; del orden de 1 por
+segundo). Si sale `ERROR: la placa no confirmo...` o `sim_rx` no coincide, **la corrida
+no vale** (no la cuentes como falla del vuelo): repítela. Con eso la placa procesa
+exactamente las mismas lecturas que `pio test -e native`, y los números de las tablas
+deben coincidir con la tolerancia indicada en cada prueba.
 
 Cada prueba pide leer, en `sim_serial`: los mensajes `# ESTADO`, `# DISPARO ...` y el
 `STAT` final; y en la estación: la línea de tiempo, los eventos, las banderas y las
@@ -203,11 +223,28 @@ Antes: estación abierta, **INICIAR TOMA DE DATOS** pulsado.
 | vz en DESCENSO | ≈ -10 m/s, tarjeta **verde** |
 | Banderas al final | 0x17: base lista, liberación, disparo, aterrizaje; **sin** respaldo ni fallos |
 | `STAT` final | `estado=6 ... disparos=1 ... intentos=1 confirmado=1`, `liberaciones_descartadas=0` |
+| Enlace serie (`sim_serial` y `STAT`) | `OK: la placa recibio las 19391 lineas en orden`; `sim_rx=19391 sim_descartadas=0 sim_crc=1`; `ciclos=19391` |
+| Duración en la PC | 3 min 14 s a ~3 min 50 s (cada reenvío retrasa el resto) |
 | Pérdida de paquetes (estación) | ≤ 2 % |
 
-**Pasa** si todos se cumplen; la condición decisiva: **h_despliegue ∈ [197, 203] m**,
-estados en orden y banderas 0x17. **Falla** si dispara por respaldo (bit 3), si falta un
-estado o si h_despliegue sale del rango. (Con `--seed 7`: h_despliegue ≈ 199.7.)
+**Tolerancia nueva.** Con el enlace verificado la placa procesa las mismas lecturas que la
+prueba native `test_sim_link` (mismo formato de texto que `sim_serial.py`), así que los
+tiempos de liberación y disparo deben salir **iguales a ±0.02 s** (`t_ms` de `# ESTADO 3` =
+104 790 y de `# DISPARO` = 113 110) y `h`, `vz` y `h_despliegue` del `# DISPARO` **iguales
+a ±0.5 m** (215.9, -34.5, 198.6); el margen solo cubre diferencias de redondeo de punto
+flotante entre la PC y el ESP32-S3. Si se cumple la condición del enlace pero no esta, es
+una diferencia real entre la placa y native: anótala y avisa.
+
+**Pasa** si el enlace se confirmó y se cumplen las filas; la condición decisiva:
+**h_despliegue ∈ [197, 203] m** (y dentro de ±0.5 m de 198.6), estados en orden y banderas
+0x17. **Falla** si dispara por respaldo (bit 3), si falta un estado o si h_despliegue sale
+del rango. **No vale** (repetir) si `sim_serial` no imprime `OK: la placa recibio ...`.
+(Con `--seed 7`: h_despliegue ≈ 199.7.)
+
+> **19-nov-2026, primera corrida (firmware sin CRC): no valió.** `sim_rx=17318
+> sim_invalidas=137` de 19 391 enviadas; disparo a T+45 s con `h=238.5 vz=+130.0`,
+> h_max de la estación 1061 m. Causa: bytes perdidos en el puerto serie y líneas pegadas
+> (ver arriba y PREGUNTAS P49). Repetir con el firmware y el `sim_serial.py` nuevos.
 
 ### (c) Modo B (liberación a ~100 m, autogiro a 50 m)
 **Objetivo:** el mismo vuelo a baja altura con `DEPLOY_MODE = B`.
@@ -438,5 +475,8 @@ Una prueba a nivel de suelo es más exigente que el vuelo (el suelo atenúa la s
 | La estación dice "ESPERANDO DATOS" en la simulación | En modo simulación la placa **no transmite** hasta la primera línea `SIM`; empieza `sim_serial`. |
 | Estados que no coinciden con esta guía | Confirma `MODO A` (el modo se guarda en NVS) y que el CSV es del mismo modo. |
 | `sim_descartadas` > 0 en `STAT` | El PC mandó más rápido de lo que la placa consume: usa `--speed 1`. |
+| `ERROR: la placa no confirmo todas las lineas` | Firmware sin CRC (sube `heltec_banco` de nuevo) o la placa se reinició durante el vuelo. Repite la corrida. |
+| `sim_crc=0` en `STAT` | La placa no recibió líneas con CRC: `sim_serial.py` viejo o `--sin-crc`. |
+| Vuelo con disparo muy temprano, h_max de cientos de metros de más | Líneas dañadas aceptadas (firmware o `sim_serial.py` sin CRC). Ver "Integridad del enlace" en §1.7. |
 | Pérdida alta con las placas a 1 m | Revisa antenas; separa las placas ≥ 1 m (saturación del receptor). |
 | Quedó el modo B o C guardado | `MODO A` en el monitor. |
