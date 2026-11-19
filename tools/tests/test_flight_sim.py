@@ -106,3 +106,46 @@ def test_escenario_fall_tilt():
 def test_escenario_v_terminal():
     rows = _raw(seed=1, v_terminal=60)
     assert min(r[11] for r in rows) < -45
+
+
+def _states(pk):
+    out = []
+    for p in pk:
+        if not out or out[-1] != p.estado:
+            out.append(p.estado)
+    return out
+
+
+def test_modo_b():
+    rows = []
+    pk = [p for _, p in S.simulate(seed=1, raw_cb=rows.append, **S.MODES["B"])]
+    assert max(r[10] for r in rows) == pytest.approx(100, abs=0.5)
+    assert _states(pk) == list(range(7))
+    fire = next(p for p in pk if p.estado == T.DESPLIEGUE)
+    assert 50 <= fire.altura_m <= 70           # h_disp = 50 + |vz| * 0.5
+    assert not pk[-1].banderas & T.F_DISPARO_RESPALDO
+
+
+def test_modo_c_tinaco():
+    rows = []
+    pk = [p for _, p in S.simulate(seed=1, raw_cb=rows.append, **S.MODES["C"])]
+    assert max(r[10] for r in rows) == pytest.approx(8, abs=0.5)
+    st = _states(pk)
+    assert T.ASCENSO not in st and st[-1] == T.ATERRIZADO
+    t_fall = next(r[0] for r in rows if r[15] == "fall")
+    t_fire = next(t for t, p in S.simulate(seed=1, **S.MODES["C"]) if p.banderas & T.F_DISPARO)
+    assert t_fire - t_fall < 0.5               # 150 ms de baja g + la siguiente transmisión
+
+
+def test_cli_release_y_deploy_alt(tmp_path):
+    import csv
+    out = tmp_path / "b.csv"
+    assert S.main(["--raw-csv", str(out), "--seed", "1", "--mode", "B", "--release-alt", "120",
+                   "--deploy-alt", "60"]) == 0
+    rows = list(csv.DictReader(open(out)))
+    assert max(float(r["h_true"]) for r in rows) == pytest.approx(120, abs=0.5)
+    # --h-top sigue funcionando (alias de --release-alt)
+    out2 = tmp_path / "a.csv"
+    assert S.main(["--raw-csv", str(out2), "--seed", "1", "--h-top", "300"]) == 0
+    rows = list(csv.DictReader(open(out2)))
+    assert max(float(r["h_true"]) for r in rows) == pytest.approx(300, abs=0.5)

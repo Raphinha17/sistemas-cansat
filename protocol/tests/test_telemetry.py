@@ -37,3 +37,14 @@ def test_saturation():
 def test_bad_length():
     with pytest.raises(ValueError):
         T.decode(b"\x00" * 31)
+
+
+def test_log_event():
+    raw = struct.pack("<BBBBI24x", T.LOG_EVENT_MARK, T.LOG_EV_MODO, ord("B"), 0, 123456)
+    ev = T.decode_log_event(raw)
+    assert ev == T.LogEvent(tipo=T.LOG_EV_MODO, valor=ord("B"), t_ms=123456)
+    assert ev.modo == "B"
+    # Un paquete normal no es evento
+    assert T.decode_log_event(T.encode(T.Packet())) is None
+    with pytest.raises(ValueError):
+        T.decode_log_event(raw[:31])

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import struct
 from dataclasses import dataclass, fields
+from typing import Optional
 
 PACKET_SIZE = 32
 VERSION = 1
@@ -86,6 +87,36 @@ def decode(data: bytes) -> Packet:
         roll_deg=roll / 100, pitch_deg=pitch / 100, yaw_deg=yaw / 100,
         banderas=flags, bateria_v=bat / 10,
     )
+
+
+# Registros de evento del log de la placa (/vuelo.bin, comando DUMP). Miden 32 B como el
+# paquete, pero el byte 0 es LOG_EVENT_MARK en vez de la versión. No se transmiten.
+LOG_EVENT_MARK = 0xEE
+LOG_EV_ARRANQUE = 1   # valor = modo de despliegue al arrancar ('A', 'B' o 'C')
+LOG_EV_MODO = 2       # valor = nuevo modo de despliegue (comando MODO)
+_EV_FMT = "<BBBBI24x"
+assert struct.calcsize(_EV_FMT) == PACKET_SIZE
+
+
+@dataclass
+class LogEvent:
+    tipo: int
+    valor: int
+    t_ms: int
+
+    @property
+    def modo(self) -> str:
+        return chr(self.valor)
+
+
+def decode_log_event(data: bytes) -> Optional[LogEvent]:
+    """Devuelve el evento si el registro del log es de evento; None si es un paquete."""
+    if len(data) != PACKET_SIZE:
+        raise ValueError(f"se esperaban {PACKET_SIZE} bytes, llegaron {len(data)}")
+    if data[0] != LOG_EVENT_MARK:
+        return None
+    _, tipo, valor, _, t_ms = struct.unpack(_EV_FMT, data)
+    return LogEvent(tipo=tipo, valor=valor, t_ms=t_ms)
 
 
 def field_names() -> list[str]:

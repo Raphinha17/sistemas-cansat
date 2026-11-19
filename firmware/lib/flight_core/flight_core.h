@@ -37,11 +37,16 @@ class FlightCore {
                       const MissionRecord &rec);
   void step(const CoreInput &in);
 
-  // Modo DEMO_SEPARACION (solo lo activa el entorno heltec_demo)
+  // Modo de despliegue (A, B o C). Se conserva en begin()/beginRecovered().
+  void setDeployMode(DeployMode m) { sm_.setDeployMode(m); }
+  DeployMode deployMode() const { return sm_.deployMode(); }
+
+  // Modo DEMO_SEPARACION (solo lo activan los entornos heltec_demo y heltec_banco)
   void setDemo(bool on) { demo_on_ = on; }
   bool demoEnabled() const { return demo_on_; }
   void demoArm(uint32_t t_ms) { if (demo_on_) demo_.arm(t_ms); }
   void demoDisarm() { demo_.disarm(); }
+  void demoToggle(uint32_t t_ms) { if (demo_on_) demo_.toggle(t_ms); }
   const DemoSeparation &demo() const { return demo_; }
 
   // --- Salidas del último ciclo ---

@@ -6,26 +6,21 @@ código mientras no haya respuesta. Al confirmar, actualizar `firmware/include/c
 
 ## Hardware y pines
 
-**P1. Pines externos.** SDA/SCL del bus de sensores, señal del servo, energía del servo,
-reed, enclavamiento y ADC de la pila.
+**P1. Pines externos.** SDA/SCL del bus de sensores, señal del servo, energía del servo y
+ADC de la pila.
 - RESUELTO en parte (electrónica): SDA = GPIO41, SCL = GPIO42 (BMP280 y MPU6500 en el
   mismo bus), señal del servo = GPIO7, sin pin de energía del servo (ver P30).
   Verificado en `pins_arduino.h` de la variante: no chocan con el SX1262 (8-14), la OLED
   (17, 18, 21), `Vext` (36) ni el LED (35). GPIO41/42 son además el `SDA`/`SCL` por
   defecto de la variante, y GPIO7 no es pin de arranque (strapping: 0, 3, 45, 46).
-- Pendientes: reed, enclavamiento y ADC de la pila. Siguen como `TODO_CONFIRMAR` y los
-  entornos `heltec_wifi_lora_32_V3` y `heltec_demo` no compilan (#error) hasta que se den.
-  Para el banco existe `heltec_banco` (sin reed ni ADC; NUNCA para vuelo).
+- Pendiente: el pin del ADC de la pila (`PIN_BATT_ADC`, `TODO_CONFIRMAR`). Es opcional:
+  con `BATT_ADC_ENABLED 0` (por defecto) el paquete reporta batería 0 y el `#error` no
+  lo exige; los tres entornos de la placa compilan sin `PERMITIR_PINES_PENDIENTES`.
+  Ver P8b.
+- Ya no hay reed ni enclavamiento (ver "Resueltas", P2).
 - Nota: en la Heltec V3, GPIO17/18 son el I2C de la pantalla OLED y GPIO36 es `Vext`
   (alimentación conmutada de la OLED y del conector). ¿Los sensores van en el mismo bus
   que la OLED? ¿Se alimentan de `Vext` (entonces el firmware debe encenderlo)?
-
-**P2. Enclavamiento y reed.** ¿Qué nivel lógico mantiene encendida la placa? ¿El firmware
-debe escribir el pin al arrancar, y cuándo puede soltarlo? ¿El reed se lee como entrada
-(con qué pull) o solo actúa sobre el enclavamiento?
-- SUPOSICIÓN: el firmware no escribe `PIN_LATCH`. El reed solo se lee en el modo
-  `DEMO_SEPARACION` (para armar): activo en bajo con pull-up interno
-  (`REED_ACTIVE_LEVEL 0`, `REED_PULLUP 1` en `config.h`).
 
 **P2b. Energía del servo.** ¿Qué nivel enciende el servo (`SERVO_POWER_ON_LEVEL`)?
 - RESUELTO: no hay pin de energía (`SERVO_POWER_ENABLED 0`). Ver P30.
@@ -61,11 +56,14 @@ vertical. ¿Cómo va montada la placa? ¿Qué eje y signo usa la compuerta de 45
   retrasa la altura a 35 m/s), standby 1 ms; se lee a 25 Hz. El ruido sin IIR
   (~1–2 Pa ≈ 0.1–0.2 m) lo filtra el Kalman.
 
-**P8b. Batería.** Divisor resistivo de la pila de 9 V al ADC: relación
-`BAT_DIVIDER_RATIO`.
-- SUPOSICIÓN: 0 (desconocido) → el paquete reporta batería 0.0 V. La lectura de batería
-  propia de la Heltec (GPIO1 + ADC_Ctrl) mide la LiPo de la placa, no la pila de 9 V,
-  por eso no se usa.
+**P8b. Batería.** Medición opcional de la pila de 9 V con un divisor resistivo al ADC:
+`BATT_ADC_ENABLED`, `PIN_BATT_ADC` y `BATT_DIVIDER_RATIO` en `config.h`.
+- SUPOSICIÓN: desactivada (`BATT_ADC_ENABLED 0`) → el paquete reporta batería 0.0 V y no
+  se exige pin. Para activarla: poner 1, el pin (si falta, `#error` en los entornos de la
+  placa) y la relación del divisor (si es 0, `static_assert` en `power.cpp`).
+  ¿Electrónica va a poner el divisor? ¿En qué GPIO (con ADC1) y con qué resistencias?
+- La lectura de batería propia de la Heltec (GPIO1 + ADC_Ctrl) mide la LiPo de la
+  placa, no la pila de 9 V, por eso no se usa.
 
 ## Software
 
@@ -112,6 +110,9 @@ particiones por defecto (~1.4 MB de datos) caben ~15 min a 50 Hz; la espera en t
 1 Hz casi no ocupa.
 - ¿Basta con 15 min? Si no, usar una tabla de particiones con más espacio para datos.
 - El log persiste entre reinicios (se agrega al final); se borra con el comando `BORRAR`.
+- Además de los paquetes, el log tiene registros de evento de 32 B (byte 0 = `0xEE`): en
+  cada arranque y en cada cambio de modo de despliegue, con el modo (ver
+  `protocol/packet.md`, "Log", y `decode_log_event` en `protocol/telemetry.py`).
 
 **P14. Formato de salida del receptor.** La SPEC dice "hex más RSSI y SNR".
 - SUPOSICIÓN: `HEX,RSSI,SNR` por línea (ver `protocol/packet.md`); errores como
@@ -157,13 +158,13 @@ detectar (h y vz por integración derivan).
 acelerómetro el Kalman usa velocidad casi constante y vz va retrasada.
 - En el simulador el despliegue quedó a 199.4 m; la prueba tolera ±10 m.
 
-**P22. Altura mínima de liberación (240 m).**
+**P22. Altura mínima de liberación (DEPLOY_ALT + 40 m: 240 m en A, 90 m en B).**
 - SUPOSICIÓN: se evalúa al *inicio* de cada evidencia: al empezar la baja g (criterio
   a), al empezar vz < -12 m/s (b) y con la altura máxima (c). Si se evaluara al confirmar,
   una liberación a ~245 m se rechazaría porque al confirmar ya cayó varios metros.
 
-**P23. Disparo por tiempo sin barómetro.** `SM_T_DISPARO_SIN_BARO_S = 7 s` (mismo valor
-que el simulador).
+**P23. Disparo por tiempo sin barómetro (modo A).** `DEPLOY_T_SIN_BARO_A_S = 7 s` (mismo
+valor que el simulador). Para el modo B, ver P32.
 - Con liberación a 450 m y terminal 35 m/s, 7 s ≈ 290 m; 9 s ≈ 205 m. Pero sin barómetro
   no se sabe a qué altura fue la liberación: si fuera a 300 m, 9 s sería ~55 m.
   SUPOSICIÓN: 7 s (desplegar alto es más seguro que bajo). Tras un reinicio en CAIDA sin
@@ -194,6 +195,9 @@ tras 1 s, se decide el estado:
 - Riesgo: si se apaga la placa a mitad de una misión en tierra (p. ej. tras un ensayo
   en que subió > 20 m), el siguiente arranque cree que es un reinicio en vuelo. La placa
   lo avisa por serial; se borra con `MISION_BORRAR`. ¿Hace falta otra protección?
+  Con el interruptor deslizable en la línea de la pila, apagar la placa a mitad de una
+  prueba (o un corte de corriente) deja el registro en NVS. Recomendación: mandar
+  `MISION_BORRAR` antes de cada vuelo o prueba (ver `docs/PRUEBA_VIDEO.md`).
 - Escribir en flash detiene la caché de ambos núcleos unos milisegundos; las escrituras
   de NVS son pocas (ya pasa lo mismo con el log).
 
@@ -203,15 +207,13 @@ tras 1 s, se decide el estado:
   ESP32 y el radio (el MPU6500 gasta ~3 mA); en tierra solo bajan la TX (1 Hz) y el log
   (1 Hz). Un ahorro real requeriría bajar la frecuencia de la CPU o light-sleep.
 
-**P28. Modo DEMO_SEPARACION.** Entorno `heltec_demo` (mismo `#error` de pines).
-- SUPOSICIÓN: al armar (comando `ARMAR` o flanco del reed hacia "imán presente" después
-  del arranque, con antirrebote de 50 ms) el servo se alimenta en -10° y, a los
-  `DEMO_DELAY_S` s, hace la misma secuencia del vuelo (con reintentos si no hay pico de
-  aceleración). Mientras está armado: TX 5 Hz y log 50 Hz. El instante de separación
-  queda en el log (registro forzado ese ciclo, con bit2) y por serial
-  (`# SEPARACION t_ms=...`). Se puede re-armar para repetir la toma; `DESARMAR` cancela.
-- Si el reed es el propio interruptor de encendido, ¿"armar por imán" significa armar al
-  encender? Hoy hace falta un segundo paso del imán después de arrancar.
+**P28. Modo DEMO_SEPARACION.** Entornos `heltec_demo` y `heltec_banco`.
+- SUPOSICIÓN: al armar (comando `ARMAR` o toque largo del botón PRG, ver P34) el servo se
+  alimenta en -10° y, a los `DEMO_DELAY_S` s, hace la misma secuencia del vuelo (con
+  reintentos si no hay pico de aceleración). Mientras cuenta y después del disparo: TX
+  5 Hz y log 50 Hz. El instante de separación queda en el log (registro forzado ese
+  ciclo, con bit2) y por serial (`# SEPARACION t_ms=...`). Se puede re-armar para repetir
+  la toma; `DESARMAR` o un segundo toque largo durante la cuenta cancelan.
 
 **P29. Modo simulación por serial (prueba B5).** Formato en `docs/sim_input.md`.
 - El repositorio no define la prueba B5. SUPOSICIÓN: prueba en banco del firmware
@@ -241,5 +243,74 @@ directo del regulador de 5 V, así que tiene energía desde que se enciende la p
   Alternativa más segura: un MOSFET de energía (`SERVO_POWER_ENABLED 1` con
   `PIN_SERVO_POWER` y `SERVO_POWER_ON_LEVEL`; el código ya lo soporta).
 
+## Modos de despliegue, botón PRG y entornos (etapa 3)
+
+**P31. Modo de despliegue (`DEPLOY_MODE`).** A (450 m -> 200 m), B (100 m -> 50 m) y C
+(tinaco), por defecto A. Comando `MODO A|B|C`; `MODO` solo muestra el actual.
+- SUPOSICIÓN: el modo solo se puede cambiar en AUTOPRUEBA o TIERRA (con la misión en
+  curso responde `ERR`), para que un comando por error no cambie las alturas en el aire.
+  Se guarda en NVS en una clave aparte del registro de misión ("modo"), así que se
+  conserva al apagar y en un reinicio en vuelo. Se aplica también en el modo simulación
+  por serial (y se guarda en NVS: es configuración, no misión).
+- "Visible en el log": registro de evento en `/vuelo.bin` en cada arranque (con el modo
+  vigente) y en cada cambio (ver P13). El paquete de telemetría no lleva el modo (no hay
+  bytes libres); la estación terrena no lo ve. ¿Hace falta transmitirlo?
+
+**P32. Parámetros del modo B que la tarea no fija.** Altura mínima de liberación 90 m y
+h_disp = 50 + |vz| * t_lat, como se pidió. Lo demás:
+- SUPOSICIÓN: respaldo por altura `DEPLOY_RESPALDO_B_M = 40 m` (en A es 200 - 40 =
+  160 m; en B, 50 - 40 = 10 m sería demasiado tarde). A ~25 m/s, de h_disp (~62 m) a
+  40 m pasan ~0.9 s, así que en B el respaldo de altura suele llegar antes que el de la
+  compuerta (1.5 s, el mismo que en A).
+- SUPOSICIÓN: disparo por tiempo sin barómetro `DEPLOY_T_SIN_BARO_B_S = 1.5 s` desde la
+  liberación detectada: con liberación a 100 m despliega a ~65 m (a 2 s serían ~53 m, y
+  con una liberación a 90 m, ~43 m). Más alto es más seguro, como en A (P23).
+- En el simulador (`flight_sim.py --mode B`) el despliegue queda a 49.6 m y 49.4 m
+  (semillas 1 y 7).
+
+**P33. Modo C (tinaco).** "Al detectar liberación (caída libre, sin condición de altura),
+dispara de inmediato".
+- SUPOSICIÓN: la caída libre es el criterio (a) sin la confirmación por vz: |a| < 0.35 g
+  durante 150 ms basta. Esperar vz < -8 m/s tardaría ~0.8 s (≈3 m de caída), más que
+  la caída desde un tinaco. También vale el criterio (b) (vz < -12 m/s durante 0.4 s, por
+  si el IMU murió); el (c) (25 m bajo el máximo) no aplica.
+- SUPOSICIÓN: la detección está activa ya en TIERRA (el CanSat no sube los 20 m del
+  despegue). Pasa de TIERRA a CAIDA (congela p0 y marca la misión en NVS) y dispara en el
+  ciclo siguiente: el log registra el estado 3 un ciclo y luego el 4.
+- Riesgo: en C, cualquier caída de más de ~11 cm (150 ms) dispara el servo, también por
+  accidente en la mesa, y la falsa liberación de un dron también dispararía. Por eso C
+  no es para el concurso: volver a `MODO A` antes de volar.
+- En el simulador, la caída desde 8 m dura ~1.3 s: el impacto llega mientras el servo
+  está en el retorno a -10° del primer reintento, así que no confirma y hace los 3
+  intentos (en el suelo). El pico de 2 g del impacto podría tomarse como confirmación si
+  cae dentro de una ventana de -80°; en C eso no cambia nada.
+
+**P34. Botón PRG y LED (modo demo).** GPIO0 (PRG/BOOT) y LED_BUILTIN (GPIO35), de
+`pins_arduino.h` de la variante.
+- GPIO0 es pin de arranque: si se mantiene presionado PRG al encender, el ESP32-S3 entra
+  en modo de descarga y el firmware no corre. Presionarlo solo con la placa ya
+  encendida. El modo de vuelo normal no configura ni lee el botón ni el LED.
+- SUPOSICIÓN: el LED parpadea rápido durante la cuenta (100 ms encendido / 100 ms
+  apagado), queda encendido fijo después del disparo y se apaga al cancelar.
+- SUPOSICIÓN: toque largo = 1 s presionado; se detecta al cumplir el segundo (sin esperar
+  a soltar) y una sola vez por pulsación. Durante la cuenta, un toque largo cancela;
+  después del disparo, re-arma (otra toma). `ARMAR` por serial siempre (re)arma y
+  reinicia la cuenta si ya estaba contando.
+- SUPOSICIÓN: "con la bandera de disparo activa" se aplica desde el disparo: durante la
+  cuenta el paquete va a 5 Hz sin el bit 2, para que el primer paquete con el bit marque
+  el instante de la separación (`protocol/packet.md`). ¿La querían encendida también
+  durante la cuenta?
+
+**P35. Entorno `heltec_banco`.** Ahora es `heltec_demo` con `BATT_ADC_ENABLED` forzado a
+0. Con la configuración por defecto (ADC de la pila desactivado) los dos binarios hacen
+lo mismo; la diferencia aparece si se activa la medición de la pila.
+- SUPOSICIÓN: se queda (se pidió). Aviso: NUNCA para vuelo (modo demo y sin batería).
+
 ## Resueltas
-(ninguna todavía)
+
+**P2. Reed y enclavamiento (DECISIÓN DE HARDWARE).** Ya no se usa interruptor reed ni
+enclavamiento por GPIO. El interruptor es un deslizable (Steren SCM-122) que corta la
+línea de la pila de 9 V: al encender, la placa arranca y entra sola a AUTOPRUEBA ->
+TIERRA, sin armado. El firmware no lee ningún pin de encendido. Se quitaron del firmware,
+`config.h`, la documentación y las pruebas los pines del reed y del enclavamiento, su
+polaridad y el armado del modo demo por imán (ahora es con el botón PRG, P34).

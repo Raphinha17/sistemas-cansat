@@ -8,6 +8,7 @@ static Preferences prefs;
 static bool ok_ = false;
 static uint32_t writes_ = 0;
 static const char *kKey = "mision";
+static const char *kKeyModo = "modo";  // 'A', 'B' o 'C'
 
 bool begin() {
   ok_ = prefs.begin("cansat", false);
@@ -34,5 +35,16 @@ void clear() {
 }
 
 uint32_t writes() { return writes_; }
+
+bool loadMode(DeployMode &m) {
+  if (!ok_ || !prefs.isKey(kKeyModo)) return false;
+  return deployModeFromChar((char)prefs.getUChar(kKeyModo, 0), m);
+}
+
+bool saveMode(DeployMode m) {
+  if (!ok_) return false;
+  writes_++;
+  return prefs.putUChar(kKeyModo, (uint8_t)deployModeChar(m)) == 1;
+}
 
 }  // namespace mission_store

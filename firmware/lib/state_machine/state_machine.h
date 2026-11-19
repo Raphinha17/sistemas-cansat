@@ -7,6 +7,9 @@
 // Salidas (SmOutput): estado, banderas del paquete, orden al servo, tasas de TX y log,
 // y eventos de un ciclo (congelar p0, disparo, vaciar log).
 //
+// Modos de despliegue (setDeployMode): A (450 m -> 200 m, concurso), B (100 m -> 50 m) y
+// C (tinaco: disparo inmediato al detectar la caída libre, también desde TIERRA).
+//
 // Persistencia (reinicio en vuelo): record() devuelve el registro para NVS y
 // recordSeq() cambia cada vez que hay que guardarlo. Quien llama hace la escritura
 // (fuera del lazo de control). Tras un reinicio, beginRecovered() recibe lo guardado.
@@ -19,6 +22,23 @@
 #include "servo_release.h"
 
 static constexpr uint32_t kMissionMagic = 0x314E534D;  // "MSN1"
+
+// Modos de despliegue (DEPLOY_MODE, ver config.h). El modo de vuelo del concurso es A.
+enum DeployMode : uint8_t { DEPLOY_MODE_A = 0, DEPLOY_MODE_B = 1, DEPLOY_MODE_C = 2 };
+
+struct DeployParams {
+  float deploy_alt_m = 0;     // DEPLOY_ALT: h_disp = deploy_alt_m + |vz| * SM_T_LATENCIA_S
+  float release_min_m = 0;    // liberación válida solo por encima (DEPLOY_ALT + 40 m)
+  float backup_alt_m = 0;     // respaldo: por debajo de esta altura se dispara siempre
+  float t_fire_no_baro_s = 0; // baro muerto: disparo por tiempo desde la liberación
+  bool immediate = false;     // C (tinaco): disparo al detectar la caída libre
+};
+
+DeployParams deployParams(DeployMode m);
+char deployModeChar(DeployMode m);
+// 'A', 'B' o 'C' (también minúsculas). false si no es un modo válido.
+bool deployModeFromChar(char c, DeployMode &out);
+DeployMode deployModeDefault();  // DEPLOY_MODE_DEFAULT de config.h
 
 // Registro persistente de la misión (NVS). Plano y de tamaño fijo.
 struct MissionRecord {
@@ -71,6 +91,15 @@ struct SmOutput {
 
 class StateMachine {
  public:
+  // Modo de despliegue. Se conserva en begin()/beginRecovered(); quien llama solo debe
+  // cambiarlo en los estados 0 y 1 (main.cpp lo impide durante la misión).
+  void setDeployMode(DeployMode m) {
+    mode_ = m;
+    prm_ = deployParams(m);
+  }
+  DeployMode deployMode() const { return mode_; }
+  const DeployParams &deployParamsNow() const { return prm_; }
+
   // Arranque normal: estado 0 (AUTOPRUEBA).
   void begin(uint32_t t_ms);
   // Reinicio en vuelo con la misión guardada en NVS (rec.mission == 1). Se queda en el
@@ -91,12 +120,17 @@ class StateMachine {
   void enter(uint8_t s, uint32_t t);
   void fire(uint32_t t, bool backup);
   void saveRecord(uint32_t t);
+  void startMission(const SmInput &in);
+  bool detectRelease(const SmInput &in);
   void stepTierra(const SmInput &in);
   void stepAscenso(const SmInput &in);
   void stepCaida(const SmInput &in);
   void stepDescenso(const SmInput &in);
   void decideRecovered(const SmInput &in);
   float since(uint32_t t0) const { return (uint32_t)(t_ - t0) * 0.001f; }
+
+  DeployMode mode_ = deployModeDefault();
+  DeployParams prm_ = deployParams(deployModeDefault());
 
   uint8_t state_ = ST_AUTOPRUEBA;
   uint8_t latched_ = 0;  // banderas latcheadas
@@ -148,18 +182,38 @@ class DemoSeparation {
   // Arma la cuenta regresiva (también re-arma tras un disparo, para repetir la toma).
   void arm(uint32_t t_ms);
   void disarm();
+  // Toque largo del botón PRG: durante la cuenta, cancela; si no, arma.
+  void toggle(uint32_t t_ms);
   void step(uint32_t t_ms, bool confirm);
 
   bool armed() const { return armed_; }
   bool fired() const { return fired_; }
+  bool counting() const { return armed_ && !fired_; }
   bool evFire() const { return ev_fire_; }
   uint32_t tFire() const { return t_fire_; }
   float remainingS(uint32_t t_ms) const;
   ServoCmd cmd() const;
+  // LED de la placa: parpadeo rápido durante la cuenta, encendido fijo tras el disparo,
+  // apagado sin armar.
+  bool ledOn(uint32_t t_ms) const;
   const ServoSequencer &seq() const { return seq_; }
 
  private:
   bool armed_ = false, fired_ = false, ev_fire_ = false;
   uint32_t t_arm_ = 0, t_fire_ = 0;
   ServoSequencer seq_;
+};
+
+// Detección de toque largo (botón PRG del modo demo): devuelve true una sola vez por
+// pulsación, en el ciclo en que se cumplen hold_ms presionado. Hay que soltar el botón
+// para volver a detectar. Un rebote corto solo reinicia la cuenta del tiempo.
+class LongPress {
+ public:
+  explicit LongPress(uint32_t hold_ms = DEMO_BOTON_MS) : hold_ms_(hold_ms) {}
+  bool step(bool pressed, uint32_t t_ms);
+
+ private:
+  uint32_t hold_ms_;
+  bool down_ = false, done_ = false;
+  uint32_t t_down_ = 0;
 };

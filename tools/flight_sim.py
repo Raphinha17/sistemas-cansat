@@ -15,9 +15,18 @@ Ejemplos:
   py tools/flight_sim.py --port COM5 --realtime
   py tools/flight_sim.py --fail baro --fail-at 40 --loss 10 --hex
 
+Modos de despliegue (DEPLOY_MODE del firmware; por defecto A, el vuelo del concurso):
+  --mode A                    liberación a 450 m, autogiro a 200 m
+  --mode B                    liberación a 100 m, autogiro a 50 m
+  --mode C                    tinaco: sube a 8 m, se suelta y dispara al detectar la
+                              caída libre (sin altura mínima, h_disp ni compuerta)
+  --release-alt H             altura de liberación (sustituye la del modo; alias --h-top)
+  --deploy-alt H              altura del autogiro (sustituye la del modo). La liberación
+                              es válida por encima de deploy-alt + 40 m.
+
 Escenarios para las pruebas de la máquina de estados (los valores por defecto no
 cambian el vuelo nominal):
-  --h-top 200                 el dron libera a 200 m (debajo del mínimo de 240 m)
+  --release-alt 200           el dron libera a 200 m (debajo del mínimo de 240 m)
   --false-release 70          0.25 s de caída libre en el ascenso (falsa liberación)
   --fall-tilt 70              caída libre inclinada ~70° (compuerta de 45° no se cumple)
   --fall-tilt 60 --fall-tilt-until-h 214   inclinada hasta 214 m, luego se endereza
@@ -54,9 +63,11 @@ T_OPEN = 0.6                # tiempo de apertura del autogiro
 T_REST_LAND = 1.0           # reposo tras impacto antes de ATERRIZADO
 T_POST_LAND = 60.0
 
-# Parámetros de la SPEC (ver docs/SPEC.md)
+# Parámetros de la SPEC (ver docs/SPEC.md). Las alturas son las del modo A; en general
+# H_RELEASE_MIN = deploy_alt + RELEASE_MARGIN y el respaldo sale de _backup_alt().
 H_RELEASE_MIN = 240.0
 H_DEPLOY = 200.0
+RELEASE_MARGIN = 40.0
 T_LAT = 0.5
 H_BACKUP = 160.0
 T_GATE_BACKUP = 1.5
@@ -64,6 +75,15 @@ ANGLE_GATE = 45.0
 DROP_FROM_MAX = 25.0
 T_FIRE_NO_BARO = 7.0        # disparo por tiempo desde la liberación (baro muerto)
 T_DEPLOY_STATE = 1.0        # duración del estado 4 (sin validar el pico de aceleración)
+
+T_LOWG = 0.15               # s de baja g (|a| < 0.35 g) para detectar la caída libre
+
+# Modos de despliegue: valores por defecto de simulate() para --mode.
+MODES = {
+    "A": dict(h_top=H_TOP, deploy_alt=H_DEPLOY, t_fire_no_baro=T_FIRE_NO_BARO),
+    "B": dict(h_top=100.0, deploy_alt=50.0, t_fire_no_baro=1.5),
+    "C": dict(h_top=8.0, immediate=True),
+}
 
 FALSE_RELEASE_T = 0.25       # s de caída libre de la falsa liberación (--false-release)
 FALL_TILT_SIG = 5.0         # ° de oscilación cuando se fuerza la inclinación (--fall-tilt)
@@ -85,13 +105,21 @@ def _alt_from_p(p: float, p0: float) -> float:
     return 44330.0 * (1.0 - (p / p0) ** (1.0 / 5.255))
 
 
+def _backup_alt(deploy_alt: float) -> float:
+    """Respaldo por altura: 160 m en A (200 - 40) y 40 m en B (50 - 10)."""
+    return deploy_alt - min(40.0, 0.2 * deploy_alt)
+
+
 def simulate(seed: int = 1, fail: Optional[str] = None, fail_at: float = 30.0,
              rate: Optional[float] = None,
              raw_cb: Optional[Callable[[tuple], None]] = None,
              h_top: float = H_TOP, v_terminal: float = V_TERMINAL,
              false_release_at: Optional[float] = None,
              fall_tilt: Optional[float] = None,
-             fall_tilt_until_h: float = 0.0) -> Iterator[Tuple[float, T.Packet]]:
+             fall_tilt_until_h: float = 0.0,
+             deploy_alt: float = H_DEPLOY,
+             t_fire_no_baro: float = T_FIRE_NO_BARO,
+             immediate: bool = False) -> Iterator[Tuple[float, T.Packet]]:
     """Genera (t, Packet) en el instante de cada transmisión (antes de aplicar pérdidas).
 
     Escenarios (por defecto, vuelo nominal):
@@ -99,6 +127,9 @@ def simulate(seed: int = 1, fail: Optional[str] = None, fail_at: float = 30.0,
       false_release_at: instante (s) de una caída libre breve (FALSE_RELEASE_T) en el ascenso.
       fall_tilt: inclinación (°, en roll) a la que tiende el cuerpo en caída libre, con
       oscilación reducida (FALL_TILT_SIG); se mantiene mientras h > fall_tilt_until_h.
+      deploy_alt: altura del autogiro (liberación válida por encima de deploy_alt + 40 m).
+      t_fire_no_baro: disparo por tiempo desde la liberación con el barómetro muerto.
+      immediate: modo C (tinaco): disparo al detectar la caída libre, también en TIERRA.
 
     Si se da raw_cb, se llama a 100 Hz con una tupla en el orden de RAW_COLUMNS
     (sensores crudos + verdad física), útil para probar filtros del firmware.
@@ -108,6 +139,8 @@ def simulate(seed: int = 1, fail: Optional[str] = None, fail_at: float = 30.0,
 
     p0_true = 101325.0 + rnd.uniform(-600, 600)
     acc_bias = [gauss(0, 0.01) for _ in range(3)]
+    h_release_min = deploy_alt + RELEASE_MARGIN
+    h_backup = _backup_alt(deploy_alt)
     k_fall = G / v_terminal ** 2
     k_chute = G / V_CHUTE ** 2
     launch_t = T_SELFTEST + T_GROUND
@@ -150,6 +183,7 @@ def simulate(seed: int = 1, fail: Optional[str] = None, fail_at: float = 30.0,
     lowg_t0 = None
     confirm_deadline = None
     fastfall_t0 = None
+    ff_t0 = None  # inicio de la baja g del modo C
     t_rel_det = None
     hdisp_t0 = None
     fire_by_backup = False
@@ -325,7 +359,21 @@ def simulate(seed: int = 1, fail: Optional[str] = None, fail_at: float = 30.0,
                 math.cos(math.radians(est_roll)) * math.cos(math.radians(est_pitch))))))
         new_state = state
 
-        if state == T.AUTOPRUEBA:
+        # Modo C: la caída libre basta (sin altura mínima), en TIERRA o en ASCENSO.
+        if immediate and state in (T.TIERRA, T.ASCENSO):
+            if not imu_dead and mag < 0.35:
+                ff_t0 = ff_t0 if ff_t0 is not None else t
+                if t - ff_t0 >= T_LOWG:
+                    new_state = T.CAIDA
+                    flags |= T.F_LIBERACION
+                    t_rel_det = t
+                    p0_frozen = True
+            else:
+                ff_t0 = None
+
+        if new_state != state:
+            pass
+        elif state == T.AUTOPRUEBA:
             if t >= T_SELFTEST:
                 new_state = T.TIERRA
                 flags |= T.F_BASE_LISTA
@@ -340,7 +388,7 @@ def simulate(seed: int = 1, fail: Optional[str] = None, fail_at: float = 30.0,
         elif state == T.ASCENSO:
             h_max = max(h_max, est_h)
             released = False
-            if est_h > H_RELEASE_MIN or baro_dead:
+            if (est_h > h_release_min or baro_dead) and not immediate:
                 if not imu_dead:
                     if mag < 0.35:
                         lowg_t0 = lowg_t0 if lowg_t0 is not None else t
@@ -367,11 +415,13 @@ def simulate(seed: int = 1, fail: Optional[str] = None, fail_at: float = 30.0,
                 t_rel_det = t
         elif state == T.CAIDA:
             fire = False
-            if baro_dead:
-                if t - t_rel_det >= T_FIRE_NO_BARO:
+            if immediate:
+                fire = True
+            elif baro_dead:
+                if t - t_rel_det >= t_fire_no_baro:
                     fire, fire_by_backup = True, True
             else:
-                h_disp = H_DEPLOY + abs(est_vz) * T_LAT
+                h_disp = deploy_alt + abs(est_vz) * T_LAT
                 if est_h <= h_disp:
                     hdisp_t0 = hdisp_t0 if hdisp_t0 is not None else t
                     gate = imu_dead or angle <= ANGLE_GATE
@@ -379,7 +429,7 @@ def simulate(seed: int = 1, fail: Optional[str] = None, fail_at: float = 30.0,
                         fire = True
                     elif t - hdisp_t0 >= T_GATE_BACKUP:
                         fire, fire_by_backup = True, True
-                if est_h <= H_BACKUP and not fire:
+                if est_h <= h_backup and not fire:
                     fire, fire_by_backup = True, True
             if fire:
                 new_state = T.DESPLIEGUE
@@ -465,7 +515,12 @@ def main(argv=None) -> int:
     ap.add_argument("--realtime", action="store_true", help="emite a ritmo de reloj real")
     ap.add_argument("--raw-csv", help="escribe sensores crudos + verdad a 100 Hz (CSV) para "
                     "probar los filtros del firmware; si no hay --out/--port/--hex, no emite paquetes")
-    ap.add_argument("--h-top", type=float, default=H_TOP, help="altura de liberación (def. 450 m)")
+    ap.add_argument("--mode", choices=sorted(MODES), default="A",
+                    help="modo de despliegue (def. A: 450 m -> 200 m; B: 100 m -> 50 m; C: tinaco)")
+    ap.add_argument("--release-alt", "--h-top", dest="h_top", type=float, default=None,
+                    help="altura de liberación (def. la del modo: A 450 m, B 100 m, C 8 m)")
+    ap.add_argument("--deploy-alt", type=float, default=None,
+                    help="altura del autogiro (def. la del modo: A 200 m, B 50 m)")
     ap.add_argument("--v-terminal", type=float, default=V_TERMINAL,
                     help="velocidad terminal en caída libre (def. 35 m/s)")
     ap.add_argument("--false-release", type=float, metavar="T",
@@ -495,9 +550,15 @@ def main(argv=None) -> int:
     sent = dropped = 0
     t0 = time.monotonic()
     try:
-        for t, pkt in simulate(a.seed, a.fail, a.fail_at, a.rate, raw_cb, h_top=a.h_top,
+        kw = dict(MODES[a.mode])
+        if a.h_top is not None:
+            kw["h_top"] = a.h_top
+        if a.deploy_alt is not None:
+            kw["deploy_alt"] = a.deploy_alt
+        for t, pkt in simulate(a.seed, a.fail, a.fail_at, a.rate, raw_cb,
                                v_terminal=a.v_terminal, false_release_at=a.false_release,
-                               fall_tilt=a.fall_tilt, fall_tilt_until_h=a.fall_tilt_until_h):
+                               fall_tilt=a.fall_tilt, fall_tilt_until_h=a.fall_tilt_until_h,
+                               **kw):
             if loss_rnd.random() * 100 < a.loss:
                 dropped += 1
                 continue

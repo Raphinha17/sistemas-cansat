@@ -3,8 +3,12 @@
 // Pines externos: NO inventar. Los no confirmados quedan como TODO_CONFIRMAR hasta que
 // el equipo de electrónica los confirme. Confirmados por electrónica: I2C (41/42) y
 // señal del servo (7); verificados contra pins_arduino.h de la variante: no los usan
-// el SX1262 (8-14), la OLED (17, 18, 21), Vext (36) ni el LED (35). Los pines del radio SX1262 NO están aquí: salen de la
-// variante de la placa (pins_arduino.h de heltec_wifi_lora_32_V3).
+// el SX1262 (8-14), la OLED (17, 18, 21), Vext (36) ni el LED (35). Los pines del radio
+// SX1262 NO están aquí: salen de la variante de la placa (pins_arduino.h de
+// heltec_wifi_lora_32_V3).
+//
+// Encendido: interruptor deslizable (Steren SCM-122) en serie con la pila de 9 V. No pasa
+// por ningún GPIO: al encender, la placa arranca y entra sola a AUTOPRUEBA -> TIERRA.
 #pragma once
 
 // Valor centinela para pines no confirmados.
@@ -22,46 +26,43 @@
 // estado 3 en adelante (señal en entrada con pull-down mientras tanto).
 #define SERVO_POWER_ENABLED 0
 #define PIN_SERVO_POWER (-1)            // no existe (SERVO_POWER_ENABLED = 0)
-
-#define PIN_REED TODO_CONFIRMAR         // lectura del reed
-#define PIN_LATCH TODO_CONFIRMAR        // enclavamiento de encendido (GPIO)
-#define PIN_BAT_ADC TODO_CONFIRMAR      // ADC de la pila de 9 V (con divisor)
-
 // Nivel lógico de PIN_SERVO_POWER que ENCIENDE el servo. Sin uso mientras
 // SERVO_POWER_ENABLED = 0.
 #define SERVO_POWER_ON_LEVEL (-1)
-// Nivel de PIN_REED con el imán presente (solo lo usa el modo DEMO_SEPARACION para
-// armar). Suposición: LOW, con pull-up interno (PREGUNTAS P2).
-#define REED_ACTIVE_LEVEL 0
-#define REED_PULLUP 1
 
-// Relación del divisor de la batería (V_pila / V_adc). Pendiente: depende del divisor
-// que diseñe electrónica. 0 = desconocido -> no se reporta batería (bateria = 0).
-#define BAT_DIVIDER_RATIO 0.0f
+// ADC de la pila de 9 V (opcional). Con BATT_ADC_ENABLED = 0 el paquete reporta batería 0
+// y no se exige pin. Para activarlo hacen falta el pin y el divisor (PREGUNTAS P8b).
+#ifndef BATT_ADC_ENABLED
+#define BATT_ADC_ENABLED 0
+#endif
+#define PIN_BATT_ADC TODO_CONFIRMAR     // ADC de la pila de 9 V (con divisor)
+// Relación del divisor (V_pila / V_adc). Debe ser > 0 si BATT_ADC_ENABLED = 1.
+#define BATT_DIVIDER_RATIO 0.0f
 
-// ENTORNO DE BANCO (heltec_banco, define CANSAT_BANCO): desactiva el reed y el ADC de la
-// pila (batería = 0; el modo demo se arma solo con el comando serial ARMAR) y permite
-// compilar con pines pendientes.
-// *** NUNCA USAR heltec_banco PARA VUELO: sin reed, sin batería y sin verificación de
-// *** pines. Solo para probar sensores y servo en la mesa.
+// Botón PRG y LED integrado de la Heltec V3 (de pins_arduino.h de la variante: el botón
+// PRG/BOOT es GPIO0 y LED_BUILTIN es GPIO35). Solo los usa el modo DEMO_SEPARACION
+// (entornos heltec_demo y heltec_banco); el modo de vuelo normal no los toca.
+#define PIN_BOTON_PRG 0                 // activo en bajo (pull-up en la placa)
+#define PIN_LED_PLACA 35
+
+// ENTORNO DE BANCO (heltec_banco, define CANSAT_BANCO): modo DEMO_SEPARACION y sin
+// medición de batería (BATT_ADC_ENABLED forzado a 0; el paquete reporta batería 0).
+// *** NUNCA USAR heltec_banco PARA VUELO: es el firmware del modo demo y no mide la pila.
 #ifdef CANSAT_BANCO
-#undef PIN_REED
-#define PIN_REED (-1)
-#undef PIN_BAT_ADC
-#define PIN_BAT_ADC (-1)
-#ifndef PERMITIR_PINES_PENDIENTES
-#define PERMITIR_PINES_PENDIENTES
-#endif
+#undef BATT_ADC_ENABLED
+#define BATT_ADC_ENABLED 0
 #endif
 
-// La verificación se activa SOLO en los entornos de la placa (vuelo y demo), que
-// definen CANSAT_FLIGHT_BOARD. Nunca en native ni en rx_station.
+// La verificación se activa SOLO en los entornos de la placa (vuelo, demo y banco), que
+// definen CANSAT_FLIGHT_BOARD. Nunca en native ni en rx_station. Solo se exigen los pines
+// de las funciones activas: el ADC de la pila si BATT_ADC_ENABLED = 1 y la energía del
+// servo si SERVO_POWER_ENABLED = 1.
 // Para compilar a pesar de los pines pendientes (solo pruebas de compilación):
 //   -D PERMITIR_PINES_PENDIENTES
 #if defined(CANSAT_FLIGHT_BOARD) && !defined(PERMITIR_PINES_PENDIENTES)
 #if (PIN_I2C_SDA == TODO_CONFIRMAR) || (PIN_I2C_SCL == TODO_CONFIRMAR) ||           \
-    (PIN_SERVO_SIGNAL == TODO_CONFIRMAR) || (PIN_REED == TODO_CONFIRMAR) ||         \
-    (PIN_LATCH == TODO_CONFIRMAR) || (PIN_BAT_ADC == TODO_CONFIRMAR) ||             \
+    (PIN_SERVO_SIGNAL == TODO_CONFIRMAR) ||                                         \
+    (BATT_ADC_ENABLED && (PIN_BATT_ADC == TODO_CONFIRMAR)) ||                       \
     (SERVO_POWER_ENABLED &&                                                         \
      ((PIN_SERVO_POWER == TODO_CONFIRMAR) || (SERVO_POWER_ON_LEVEL == TODO_CONFIRMAR)))
 #error "Pines externos pendientes (TODO_CONFIRMAR) en include/config.h; ver docs/PREGUNTAS.md"
@@ -148,8 +149,7 @@
 // menores que esto), no el del instante de la detección, que ya incluye ~6 s de subida.
 #define SM_P0_QUIETO_VZ_MS 0.5f
 #define SM_P0_QUIETO_H_M 3.0f
-// 2 ASCENSO -> 3 CAIDA (liberación)
-#define SM_LIB_H_MIN_M 240.0f        // liberación válida solo por encima de esta altura
+// 2 ASCENSO -> 3 CAIDA (liberación). La altura mínima depende del modo (DEPLOY_*).
 #define SM_LIB_LOWG_G 0.35f          // |a| menor que esto ...
 #define SM_LIB_LOWG_T_S 0.15f        // ... durante este tiempo
 #define SM_LIB_CONFIRMA_VZ_MS -8.0f  // confirmada por vz menor que esto ...
@@ -157,13 +157,10 @@
 #define SM_LIB_VZ_RAPIDA_MS -12.0f   // o vz menor que esto ...
 #define SM_LIB_VZ_RAPIDA_T_S 0.4f    // ... durante este tiempo
 #define SM_LIB_BAJA_DESDE_MAX_M 25.0f  // o altura esta distancia por debajo del máximo
-// 3 CAIDA -> 4 DESPLIEGUE (disparo)
-#define SM_H_DISPARO_M 200.0f        // h_disp = SM_H_DISPARO_M + |vz| * SM_T_LATENCIA_S
+// 3 CAIDA -> 4 DESPLIEGUE (disparo). Alturas según el modo (DEPLOY_*).
 #define SM_T_LATENCIA_S 0.5f         // latencia servo + apertura (inicial, ajustar)
 #define SM_COMPUERTA_DEG 45.0f       // eje del cuerpo vs vertical
 #define SM_COMPUERTA_RESPALDO_S 1.5f // si la compuerta no se cumple en este tiempo, disparar
-#define SM_H_RESPALDO_M 160.0f       // por debajo de esta altura, disparar siempre
-#define SM_T_DISPARO_SIN_BARO_S 7.0f // baro muerto: disparo por tiempo desde la liberación
 // 5 DESCENSO
 #define SM_DESC_VZ_MIN_MS 8.0f       // rango de la SPEC para el descenso con autogiro
 #define SM_DESC_VZ_MAX_MS 12.0f
@@ -186,6 +183,25 @@
 #define SM_NVS_MIN_PERIODO_S 1.0f    // ... como máximo una vez por este periodo
 
 // ---------------------------------------------------------------------------
+// Modos de despliegue (DEPLOY_MODE). Se elige con el comando serial "MODO A|B|C", se
+// guarda en NVS y se ve en STAT y en el log. Solo se puede cambiar en los estados 0 y 1.
+//  A: liberación a ~450 m, autogiro a 200 m (concurso).
+//  B: liberación a ~100 m, autogiro a 50 m (prueba baja).
+//  C: tinaco: dispara en cuanto detecta la caída libre (sin altura mínima, sin h_disp
+//     ni compuerta de ángulo). Ver PREGUNTAS P33.
+// En A y B: liberación válida solo si h > DEPLOY_ALT + DEPLOY_LIB_MARGEN_M (A = 240 m,
+// B = 90 m) y h_disp = DEPLOY_ALT + |vz| * SM_T_LATENCIA_S.
+// ---------------------------------------------------------------------------
+#define DEPLOY_MODE_DEFAULT 'A'
+#define DEPLOY_LIB_MARGEN_M 40.0f
+#define DEPLOY_ALT_A_M 200.0f
+#define DEPLOY_RESPALDO_A_M 160.0f   // por debajo de esta altura, disparar siempre
+#define DEPLOY_T_SIN_BARO_A_S 7.0f   // baro muerto: disparo por tiempo desde la liberación
+#define DEPLOY_ALT_B_M 50.0f
+#define DEPLOY_RESPALDO_B_M 40.0f    // suposición (PREGUNTAS P32)
+#define DEPLOY_T_SIN_BARO_B_S 1.5f   // suposición (PREGUNTAS P32)
+
+// ---------------------------------------------------------------------------
 // Servo de liberación del autogiro (MG90S). Ver servo_release.h.
 // ---------------------------------------------------------------------------
 #define SERVO_ANG_BLOQUEO_DEG -10.0f // posición de espera (autogiro retenido)
@@ -202,13 +218,15 @@
 #define SERVO_LEDC_CANAL 0
 
 // ---------------------------------------------------------------------------
-// Modo DEMO_SEPARACION (entorno heltec_demo): el servo se dispara DEMO_DELAY_S
-// segundos después de armar (comando serial ARMAR o reed).
+// Modo DEMO_SEPARACION (entornos heltec_demo y heltec_banco): el servo se dispara
+// DEMO_DELAY_S segundos después de armar (comando serial ARMAR o botón PRG presionado
+// DEMO_BOTON_MS). Un segundo toque largo antes de terminar cancela.
 // ---------------------------------------------------------------------------
 #ifndef DEMO_DELAY_S
 #define DEMO_DELAY_S 10
 #endif
-#define REED_ANTIRREBOTE_MS 50
+#define DEMO_BOTON_MS 1000           // toque largo del botón PRG
+#define DEMO_LED_PARPADEO_MS 100     // LED: medio periodo del parpadeo durante la cuenta
 
 // ---------------------------------------------------------------------------
 // Modo simulación por serial (docs/sim_input.md)

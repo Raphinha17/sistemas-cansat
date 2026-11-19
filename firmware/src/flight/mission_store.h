@@ -1,4 +1,5 @@
-// Registro de la misión en NVS (Preferences) para el reinicio en vuelo.
+// Registro de la misión en NVS (Preferences) para el reinicio en vuelo, y modo de
+// despliegue elegido con el comando MODO (clave aparte: es configuración, no misión).
 // Solo se usa desde setup() y desde la tarea de comunicaciones (la escritura en flash
 // tarda milisegundos y no debe hacerse en el lazo de control).
 #pragma once
@@ -14,4 +15,7 @@ bool load(MissionRecord &r);
 bool save(const MissionRecord &r);
 void clear();
 uint32_t writes();
+// Modo de despliegue guardado. false si no hay uno válido (se usa el de config.h).
+bool loadMode(DeployMode &m);
+bool saveMode(DeployMode m);
 }  // namespace mission_store

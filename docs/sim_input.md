@@ -61,6 +61,9 @@ SIM,40010,0.02,0.01,1.0,0.4,-1.2,0.1,nan,22.1   <- barómetro fallido
   para el siguiente arranque. Por lo mismo, el reinicio en vuelo no se prueba así (está
   cubierto por las pruebas native).
 - La batería se reporta como 0.0 V. Telemetría LoRa, log y servo funcionan normal.
+- **Modo de despliegue:** se usa el que tenga la placa (`MODO`, guardado en NVS). Para
+  probar el modo B o C, mandar `MODO B` (o `MODO C`) antes de las líneas y generar el
+  vuelo con el mismo modo (`flight_sim.py --mode B`).
 - **Salida del modo:** comando `SIM_FIN` (vuelve a los sensores reales y recalibra) o
   reinicio de la placa.
 - Mensajes de la placa durante la simulación: `# ESTADO n banderas=0x..` en cada cambio
@@ -77,7 +80,8 @@ py tools/sim_serial.py --csv vuelo.csv --port COM5 --fin
 envía a tiempo real y muestra lo que imprime la placa. Las filas con el IMU en ceros
 (`flight_sim.py --fail imu`) se mandan con los campos del IMU vacíos. Con `--dry-run`
 solo escribe las líneas, sin placa. Escenarios útiles: ver el encabezado de
-`tools/flight_sim.py` (`--fail baro`, `--fall-tilt 70`, `--false-release 70`, ...).
+`tools/flight_sim.py` (`--mode B`, `--mode C`, `--fail baro`, `--fall-tilt 70`,
+`--false-release 70`, ...).
 
 Durante un vuelo simulado completo (~3 min) el servo se alimenta al entrar en CAIDA y
 dispara al cruzar h_disp; **el mecanismo debe estar montado o el servo libre**.

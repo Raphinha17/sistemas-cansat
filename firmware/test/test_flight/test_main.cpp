@@ -27,7 +27,8 @@ static const std::vector<SimRow> &rowsOf(const char *name) {
   static std::map<std::string, std::vector<SimRow>> cache;
   auto it = cache.find(name);
   if (it == cache.end()) it = cache.emplace(name, loadSim(name)).first;
-  TEST_ASSERT_TRUE_MESSAGE(it->second.size() > 10000, "no se pudo leer el CSV del simulador");
+  // El vuelo más corto (tinaco, modo C) dura ~90 s = 9000 filas.
+  TEST_ASSERT_TRUE_MESSAGE(it->second.size() > 5000, "no se pudo leer el CSV del simulador");
   return it->second;
 }
 
@@ -72,13 +73,21 @@ struct RunResult {
 struct RunOpts {
   float reboot_at = -1;    // s: simula un reinicio de la placa en este instante
   float reboot_gap = 0.8f; // s sin datos durante el reinicio (arranque + setup)
+  DeployMode mode = DEPLOY_MODE_A;
 };
+
+static RunOpts modeOpts(DeployMode m) {
+  RunOpts o;
+  o.mode = m;
+  return o;
+}
 
 static RunResult runSim(const char *name, RunOpts o = RunOpts()) {
   const std::vector<SimRow> &rows = rowsOf(name);
   const float t_impact = firstPhaseT(rows, "impact");
   RunResult R;
   FlightCore core;
+  core.setDeployMode(o.mode);  // como main.cpp: el modo (de NVS) antes del arranque
   core.begin(0, true, true);
   MissionRecord nvs;  // "NVS": se copia el registro cada vez que cambia su contador
   uint32_t seq_seen = 0;
@@ -158,9 +167,9 @@ static RunResult runSim(const char *name, RunOpts o = RunOpts()) {
 
   char msg[300];
   snprintf(msg, sizeof msg,
-           "%s: estados=%s lib=%.2f hdisp=%.2f disp=%.2f (h_est=%.1f h_real=%.1f vz=%.1f "
+           "%s/%c: estados=%s lib=%.2f hdisp=%.2f disp=%.2f (h_est=%.1f h_real=%.1f vz=%.1f "
            "incl=%.0f/%.0f) despl=%.1f m aterr=%.2f flags=0x%02X servo=%d/%d",
-           name, R.states().c_str(), R.t_release, R.t_hdisp, R.t_fire, R.h_est_fire,
+           name, deployModeChar(o.mode), R.states().c_str(), R.t_release, R.t_hdisp, R.t_fire, R.h_est_fire,
            R.h_true_fire, R.vz_true_fire, R.tilt_hdisp, R.tilt_fire, R.deployAlt(), R.t_land,
            R.flags, R.servo_attempts, (int)R.servo_confirmed);
   TEST_MESSAGE(msg);
@@ -234,7 +243,7 @@ static void test_falsa_liberacion_descartada() {
 }
 
 static void test_liberacion_bajo_240_descartada() {
-  // El dron suelta el CanSat a 200 m (< SM_LIB_H_MIN_M): nunca se declara liberación,
+  // El dron suelta el CanSat a 200 m (< 240 m del modo A): nunca se declara liberación,
   // el servo nunca se alimenta.
   const RunResult R = runSim("low_release");
   TEST_ASSERT_EQUAL_STRING("012", R.states().c_str());
@@ -264,7 +273,7 @@ static void test_disparo_respaldo_1_5s() {
   const RunResult R = runSim("tilt_backup");
   TEST_ASSERT_TRUE(R.t_hdisp > 0 && R.t_fire > 0);
   TEST_ASSERT_FLOAT_WITHIN(0.02f, SM_COMPUERTA_RESPALDO_S, R.t_fire - R.t_hdisp);
-  TEST_ASSERT_TRUE(R.h_est_fire > SM_H_RESPALDO_M);
+  TEST_ASSERT_TRUE(R.h_est_fire > DEPLOY_RESPALDO_A_M);
   TEST_ASSERT_TRUE(R.tilt_fire > SM_COMPUERTA_DEG);
   TEST_ASSERT_BITS(FLAG_DISPARO | FLAG_DISPARO_RESPALDO, FLAG_DISPARO | FLAG_DISPARO_RESPALDO,
                    R.flags);
@@ -277,8 +286,8 @@ static void test_disparo_respaldo_160m() {
   const RunResult R = runSim("fast_fall");
   TEST_ASSERT_TRUE(R.t_hdisp > 0 && R.t_fire > 0);
   TEST_ASSERT_TRUE(R.t_fire - R.t_hdisp < SM_COMPUERTA_RESPALDO_S);
-  TEST_ASSERT_TRUE(R.h_est_fire <= SM_H_RESPALDO_M);
-  TEST_ASSERT_TRUE(R.h_est_fire > SM_H_RESPALDO_M - 1.0f);  // en el primer ciclo bajo 160 m
+  TEST_ASSERT_TRUE(R.h_est_fire <= DEPLOY_RESPALDO_A_M);
+  TEST_ASSERT_TRUE(R.h_est_fire > DEPLOY_RESPALDO_A_M - 1.0f);  // primer ciclo bajo 160 m
   TEST_ASSERT_BITS(FLAG_DISPARO | FLAG_DISPARO_RESPALDO, FLAG_DISPARO | FLAG_DISPARO_RESPALDO,
                    R.flags);
 }
@@ -295,7 +304,7 @@ static void test_falla_baro() {
   TEST_ASSERT_TRUE(R.flags & FLAG_FALLO_BARO);
   TEST_ASSERT_EQUAL(0, R.flags & (FLAG_FALLO_IMU | FLAG_NO_GO));
   TEST_ASSERT_TRUE(R.t_release >= t_fall && R.t_release - t_fall < 1.5f);
-  TEST_ASSERT_FLOAT_WITHIN(0.02f, SM_T_DISPARO_SIN_BARO_S, R.t_fire - R.t_release);
+  TEST_ASSERT_FLOAT_WITHIN(0.02f, DEPLOY_T_SIN_BARO_A_S, R.t_fire - R.t_release);
   TEST_ASSERT_BITS(FLAG_DISPARO | FLAG_DISPARO_RESPALDO, FLAG_DISPARO | FLAG_DISPARO_RESPALDO,
                    R.flags);
   TEST_ASSERT_FALSE(R.servo_power_before_caida);
@@ -354,6 +363,89 @@ static void test_reinicio_en_caida() {
 }
 
 // ---------------------------------------------------------------------------
+// Modos de despliegue
+// ---------------------------------------------------------------------------
+static void test_modo_a_por_defecto() {
+  // Sin comando MODO el firmware vuela en A: 450 m -> 200 m, liberación válida > 240 m.
+  FlightCore core;
+  TEST_ASSERT_EQUAL(DEPLOY_MODE_A, core.deployMode());
+  core.begin(0, true, true);
+  TEST_ASSERT_EQUAL(DEPLOY_MODE_A, core.deployMode());
+  const DeployParams &p = core.sm().deployParamsNow();
+  TEST_ASSERT_EQUAL_FLOAT(200.0f, p.deploy_alt_m);
+  TEST_ASSERT_EQUAL_FLOAT(240.0f, p.release_min_m);
+  TEST_ASSERT_EQUAL_FLOAT(160.0f, p.backup_alt_m);
+  TEST_ASSERT_FALSE(p.immediate);
+}
+
+static void check_modo_b(const char *name) {
+  // Liberación a 100 m (> 90 m) y despliegue a 50 m ±3 m, por altura y con la compuerta.
+  const std::vector<SimRow> &rows = rowsOf(name);
+  const float t_fall = firstPhaseT(rows, "fall");
+  const float t_impact = firstPhaseT(rows, "impact");
+  const RunResult R = runSim(name, modeOpts(DEPLOY_MODE_B));
+  TEST_ASSERT_EQUAL_STRING("0123456", R.states().c_str());
+  TEST_ASSERT_FALSE(R.servo_power_before_caida);
+  TEST_ASSERT_TRUE(R.t_release >= t_fall && R.t_release - t_fall < 1.5f);
+  TEST_ASSERT_BITS(FLAG_LIBERACION | FLAG_DISPARO, FLAG_LIBERACION | FLAG_DISPARO, R.flags);
+  TEST_ASSERT_EQUAL(0, R.flags & FLAG_DISPARO_RESPALDO);
+  TEST_ASSERT_FLOAT_WITHIN(3.0f, DEPLOY_ALT_B_M, R.deployAlt());
+  TEST_ASSERT_TRUE(R.servo_confirmed);
+  TEST_ASSERT_TRUE(R.t_land > t_impact && R.t_land - t_impact < 6.0f);
+  TEST_ASSERT_EQUAL(0, R.flags_ever & (FLAG_FALLO_BARO | FLAG_FALLO_IMU | FLAG_NO_GO));
+  TEST_ASSERT_FLOAT_WITHIN(1.5f, 0.0f, R.h_est_end);
+}
+
+static void test_modo_b_seed1() { check_modo_b("mode_b_seed1"); }
+static void test_modo_b_seed7() { check_modo_b("mode_b_seed7"); }
+
+static void test_modo_b_liberacion_bajo_90() {
+  // En B la liberación es válida por encima de 50 + 40 = 90 m: soltado a 80 m no cuenta.
+  const RunResult R = runSim("mode_b_low", modeOpts(DEPLOY_MODE_B));
+  TEST_ASSERT_EQUAL_STRING("012", R.states().c_str());
+  TEST_ASSERT_EQUAL(0, R.flags_ever & (FLAG_LIBERACION | FLAG_DISPARO));
+  TEST_ASSERT_FALSE(R.servo_power_ever);
+}
+
+static void test_modo_a_ignora_liberacion_de_b() {
+  // El mismo vuelo de B (liberación a 100 m) en el modo A: por debajo de 240 m no hay
+  // liberación ni disparo. El modo importa.
+  const RunResult R = runSim("mode_b_seed1", modeOpts(DEPLOY_MODE_A));
+  TEST_ASSERT_EQUAL_STRING("012", R.states().c_str());
+  TEST_ASSERT_FALSE(R.servo_power_ever);
+}
+
+static void test_modo_c_tinaco() {
+  // Sube a 8 m (nunca pasa los 20 m del despegue) y se suelta: detecta la caída libre en
+  // TIERRA y dispara de inmediato, sin ASCENSO, sin h_disp ni compuerta.
+  const std::vector<SimRow> &rows = rowsOf("tinaco");
+  const float t_fall = firstPhaseT(rows, "fall");
+  const RunResult R = runSim("tinaco", modeOpts(DEPLOY_MODE_C));
+  TEST_ASSERT_EQUAL_STRING("013456", R.states().c_str());
+  TEST_ASSERT_TRUE(R.t_release >= t_fall + SM_LIB_LOWG_T_S);
+  // 150 ms de baja g + un ciclo en CAIDA
+  TEST_ASSERT_TRUE(R.t_fire - t_fall < SM_LIB_LOWG_T_S + 0.05f);
+  TEST_ASSERT_TRUE(R.h_true_fire > 7.0f);
+  TEST_ASSERT_BITS(FLAG_LIBERACION | FLAG_DISPARO | FLAG_DISPARO_RESPALDO,
+                   FLAG_LIBERACION | FLAG_DISPARO, R.flags);
+  TEST_ASSERT_FALSE(R.servo_power_before_caida);
+  TEST_ASSERT_TRUE(R.flags & FLAG_ATERRIZADO);
+}
+
+static void test_modo_c_sin_altura() {
+  // Vuelo de 450 m en el modo C: dispara al detectar la caída libre (~450 m), sin esperar
+  // h_disp. (Que ignora la compuerta de ángulo lo prueba test_state_machine: en el
+  // simulador el cuerpo todavía no se inclinó 0.16 s después de soltarse.)
+  const std::vector<SimRow> &rows = rowsOf("flight_seed1");
+  const float t_fall = firstPhaseT(rows, "fall");
+  const RunResult R = runSim("flight_seed1", modeOpts(DEPLOY_MODE_C));
+  TEST_ASSERT_EQUAL_STRING("0123456", R.states().c_str());
+  TEST_ASSERT_TRUE(R.t_fire - t_fall < SM_LIB_LOWG_T_S + 0.05f);
+  TEST_ASSERT_TRUE(R.h_true_fire > 440.0f);
+  TEST_ASSERT_EQUAL(0, R.flags & FLAG_DISPARO_RESPALDO);
+}
+
+// ---------------------------------------------------------------------------
 // Formato del modo simulación por serial (docs/sim_input.md)
 // ---------------------------------------------------------------------------
 static void test_sim_line() {
@@ -394,6 +486,13 @@ int main(int, char **) {
   RUN_TEST(test_falla_imu);
   RUN_TEST(test_reinicio_en_ascenso);
   RUN_TEST(test_reinicio_en_caida);
+  RUN_TEST(test_modo_a_por_defecto);
+  RUN_TEST(test_modo_b_seed1);
+  RUN_TEST(test_modo_b_seed7);
+  RUN_TEST(test_modo_b_liberacion_bajo_90);
+  RUN_TEST(test_modo_a_ignora_liberacion_de_b);
+  RUN_TEST(test_modo_c_tinaco);
+  RUN_TEST(test_modo_c_sin_altura);
   RUN_TEST(test_sim_line);
   return UNITY_END();
 }

@@ -32,6 +32,18 @@ bool append(const TelemetryPacket &p) {
   return n == sizeof p;
 }
 
+bool appendEvent(uint8_t tipo, uint8_t valor, uint32_t t_ms) {
+  LogEvento e;
+  memset(&e, 0, sizeof e);
+  e.marca = LOG_EVENTO_MARCA;
+  e.tipo = tipo;
+  e.valor = valor;
+  e.t_ms = t_ms;
+  TelemetryPacket p;
+  memcpy(&p, &e, sizeof p);
+  return append(p);
+}
+
 void flush() {
   if (ok) f.flush();
 }

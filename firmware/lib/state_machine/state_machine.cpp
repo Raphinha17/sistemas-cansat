@@ -5,10 +5,57 @@
 static uint16_t hzToMs(int hz) { return (uint16_t)(1000 / (hz > 0 ? hz : 1)); }
 
 // ---------------------------------------------------------------------------
+// Modos de despliegue
+// ---------------------------------------------------------------------------
+DeployParams deployParams(DeployMode m) {
+  DeployParams p;
+  switch (m) {
+    case DEPLOY_MODE_B:
+      p.deploy_alt_m = DEPLOY_ALT_B_M;
+      p.release_min_m = DEPLOY_ALT_B_M + DEPLOY_LIB_MARGEN_M;
+      p.backup_alt_m = DEPLOY_RESPALDO_B_M;
+      p.t_fire_no_baro_s = DEPLOY_T_SIN_BARO_B_S;
+      break;
+    case DEPLOY_MODE_C:
+      // Sin altura mínima, sin h_disp ni compuerta: no se usan las alturas.
+      p.immediate = true;
+      break;
+    default:  // A
+      p.deploy_alt_m = DEPLOY_ALT_A_M;
+      p.release_min_m = DEPLOY_ALT_A_M + DEPLOY_LIB_MARGEN_M;
+      p.backup_alt_m = DEPLOY_RESPALDO_A_M;
+      p.t_fire_no_baro_s = DEPLOY_T_SIN_BARO_A_S;
+      break;
+  }
+  return p;
+}
+
+char deployModeChar(DeployMode m) {
+  return m == DEPLOY_MODE_B ? 'B' : m == DEPLOY_MODE_C ? 'C' : 'A';
+}
+
+bool deployModeFromChar(char c, DeployMode &out) {
+  switch (c) {
+    case 'A': case 'a': out = DEPLOY_MODE_A; return true;
+    case 'B': case 'b': out = DEPLOY_MODE_B; return true;
+    case 'C': case 'c': out = DEPLOY_MODE_C; return true;
+    default: return false;
+  }
+}
+
+DeployMode deployModeDefault() {
+  DeployMode m = DEPLOY_MODE_A;
+  deployModeFromChar(DEPLOY_MODE_DEFAULT, m);
+  return m;
+}
+
+// ---------------------------------------------------------------------------
 // Arranque
 // ---------------------------------------------------------------------------
 void StateMachine::begin(uint32_t t_ms) {
+  const DeployMode m = mode_;  // el modo es configuración: sobrevive al reinicio lógico
   *this = StateMachine();
+  setDeployMode(m);
   t_ = t_state_ = t_ms;
   state_ = ST_AUTOPRUEBA;
 }
@@ -84,8 +131,12 @@ void StateMachine::step(const SmInput &in) {
 
   if (recovering_) {
     // Tras un reinicio en vuelo: el estado guardado se mantiene hasta que el Kalman
-    // converge. En CAIDA el respaldo de altura mínima sigue activo.
-    if (state_ == ST_CAIDA && baro_ok_ && in.h <= SM_H_RESPALDO_M) {
+    // converge. En CAIDA el respaldo de altura mínima sigue activo (y en el modo C, que
+    // dispara sin condiciones, se dispara ya).
+    if (state_ == ST_CAIDA && prm_.immediate) {
+      recovering_ = false;
+      fire(t_, false);
+    } else if (state_ == ST_CAIDA && baro_ok_ && in.h <= prm_.backup_alt_m) {
       recovering_ = false;
       fire(t_, true);
     } else if (since(t_recover_) >= SM_REINICIO_ESPERA_S) {
@@ -168,13 +219,21 @@ void StateMachine::step(const SmInput &in) {
 }
 
 // ---------------------------------------------------------------------------
-// 1 TIERRA: espera el despegue
+// 1 TIERRA: espera el despegue (en el modo C también la caída libre)
 // ---------------------------------------------------------------------------
 void StateMachine::stepTierra(const SmInput &in) {
   // p0 de referencia: el último promedio con el CanSat quieto en el suelo.
   if (in.baro_ok && fabsf(in.vz) < SM_P0_QUIETO_VZ_MS && fabsf(in.h) < SM_P0_QUIETO_H_M) {
     p0_ref_ = in.p0_pa;
     has_p0_ref_ = true;
+  }
+
+  // Modo C (tinaco): la caída libre se detecta ya en TIERRA (el CanSat no sube los 20 m
+  // del despegue). Pasa directo a CAIDA, que dispara en el ciclo siguiente.
+  if (prm_.immediate && detectRelease(in)) {
+    startMission(in);
+    enter(ST_CAIDA, t_);
+    return;
   }
 
   bool go = false;
@@ -194,6 +253,12 @@ void StateMachine::stepTierra(const SmInput &in) {
   }
   if (!go) return;
 
+  startMission(in);
+  enter(ST_ASCENSO, t_);
+}
+
+// Inicio de la misión (al salir de TIERRA): congela p0 y marca la misión en curso.
+void StateMachine::startMission(const SmInput &in) {
   out_.ev_freeze_p0 = true;
   out_.p0_freeze_pa = has_p0_ref_ ? p0_ref_ : in.p0_pa;
   rec_.mission = 1;
@@ -201,7 +266,6 @@ void StateMachine::stepTierra(const SmInput &in) {
   rec_.p0_valid = in.baro_ok ? 1 : 0;
   h_max_ = in.baro_ok ? in.h : 0.0f;
   lowg_ = pend_ = fast_ = false;
-  enter(ST_ASCENSO, t_);
 }
 
 // ---------------------------------------------------------------------------
@@ -213,12 +277,20 @@ void StateMachine::stepAscenso(const SmInput &in) {
       since(t_rec_save_) >= SM_NVS_MIN_PERIODO_S)
     saveRecord(t_);
 
+  if (detectRelease(in)) enter(ST_CAIDA, t_);
+}
+
+// Criterios de liberación (SPEC, estado 3). La altura mínima es la del modo
+// (DEPLOY_ALT + 40 m). En el modo C no hay altura mínima y la caída libre basta.
+bool StateMachine::detectRelease(const SmInput &in) {
+  const float h_min = prm_.release_min_m;
   bool rel = false;
 
   // (a) Baja g: |a| < 0.35 g durante 150 ms, confirmada por vz < -8 m/s en el siguiente
   // 1 s. La altura mínima se evalúa al inicio de la ventana de baja g.
   // Con barómetro muerto vz solo viene de integrar el acelerómetro (deriva): se usa el
   // cambio de vz desde el inicio de la ventana (PREGUNTAS P19).
+  // Modo C: los 150 ms de baja g bastan, sin confirmación por vz (PREGUNTAS P33).
   if (in.imu_ok) {
     if (in.acc_g < SM_LIB_LOWG_G) {
       if (!lowg_) {
@@ -239,8 +311,8 @@ void StateMachine::stepAscenso(const SmInput &in) {
     if (pend_) {
       const bool conf = in.baro_ok ? (in.vz < SM_LIB_CONFIRMA_VZ_MS)
                                    : (in.vz - vz_pend_ < SM_LIB_CONFIRMA_VZ_MS);
-      const bool h_ok = !in.baro_ok || h_pend_ > SM_LIB_H_MIN_M;
-      if (conf && h_ok) {
+      const bool h_ok = !in.baro_ok || h_pend_ > h_min;
+      if (prm_.immediate || (conf && h_ok)) {
         rel = true;
       } else if (since(t_pend_) > SM_LIB_CONFIRMA_T_S) {
         pend_ = false;
@@ -253,6 +325,7 @@ void StateMachine::stepAscenso(const SmInput &in) {
   }
 
   // (b) y (c) solo con barómetro (SPEC: baro muerto -> liberación solo por IMU).
+  // En el modo C, (b) sin altura mínima (respaldo si el IMU murió) y (c) no aplica.
   if (in.baro_ok) {
     if (in.vz < SM_LIB_VZ_RAPIDA_MS) {
       if (!fast_) {
@@ -260,28 +333,34 @@ void StateMachine::stepAscenso(const SmInput &in) {
         t_fast_ = t_;
         h_fast_ = in.h;
       }
-      if (since(t_fast_) >= SM_LIB_VZ_RAPIDA_T_S && h_fast_ > SM_LIB_H_MIN_M) rel = true;
+      if (since(t_fast_) >= SM_LIB_VZ_RAPIDA_T_S && (prm_.immediate || h_fast_ > h_min))
+        rel = true;
     } else {
       fast_ = false;
     }
-    if (h_max_ > SM_LIB_H_MIN_M && in.h < h_max_ - SM_LIB_BAJA_DESDE_MAX_M) rel = true;
+    if (!prm_.immediate && h_max_ > h_min && in.h < h_max_ - SM_LIB_BAJA_DESDE_MAX_M)
+      rel = true;
   } else {
     fast_ = false;
   }
-
-  if (rel) enter(ST_CAIDA, t_);
+  return rel;
 }
 
 // ---------------------------------------------------------------------------
 // 3 CAIDA: altura de disparo, compuerta de ángulo y respaldos
 // ---------------------------------------------------------------------------
 void StateMachine::stepCaida(const SmInput &in) {
-  if (!in.baro_ok) {
-    // Sin barómetro: disparo por tiempo desde la liberación.
-    if (since(t_rel_) >= SM_T_DISPARO_SIN_BARO_S) fire(t_, true);
+  if (prm_.immediate) {
+    // Modo C: disparo inmediato, sin h_disp ni compuerta de ángulo.
+    fire(t_, false);
     return;
   }
-  h_disp_ = SM_H_DISPARO_M + fabsf(in.vz) * SM_T_LATENCIA_S;
+  if (!in.baro_ok) {
+    // Sin barómetro: disparo por tiempo desde la liberación.
+    if (since(t_rel_) >= prm_.t_fire_no_baro_s) fire(t_, true);
+    return;
+  }
+  h_disp_ = prm_.deploy_alt_m + fabsf(in.vz) * SM_T_LATENCIA_S;
   if (in.h <= h_disp_) {
     if (!t_hdisp_) t_hdisp_ = t_ ? t_ : 1;
     // Compuerta de ángulo; sin IMU no hay actitud y no se aplica.
@@ -295,7 +374,7 @@ void StateMachine::stepCaida(const SmInput &in) {
       return;
     }
   }
-  if (in.h <= SM_H_RESPALDO_M) fire(t_, true);
+  if (in.h <= prm_.backup_alt_m) fire(t_, true);
 }
 
 // ---------------------------------------------------------------------------
@@ -415,4 +494,35 @@ ServoCmd DemoSeparation::cmd() const {
     c = seq_.cmd();
   }
   return c;
+}
+
+void DemoSeparation::toggle(uint32_t t_ms) {
+  if (counting())
+    disarm();  // segundo toque largo antes de terminar: cancela
+  else
+    arm(t_ms);
+}
+
+bool DemoSeparation::ledOn(uint32_t t_ms) const {
+  if (counting()) return ((uint32_t)(t_ms - t_arm_) / DEMO_LED_PARPADEO_MS) % 2 == 0;
+  return fired_;
+}
+
+// ---------------------------------------------------------------------------
+// Toque largo del botón
+// ---------------------------------------------------------------------------
+bool LongPress::step(bool pressed, uint32_t t_ms) {
+  if (!pressed) {
+    down_ = done_ = false;
+    return false;
+  }
+  if (!down_) {
+    down_ = true;
+    t_down_ = t_ms;
+  }
+  if (!done_ && (uint32_t)(t_ms - t_down_) >= hold_ms_) {
+    done_ = true;  // una vez por pulsación
+    return true;
+  }
+  return false;
 }

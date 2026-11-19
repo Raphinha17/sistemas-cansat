@@ -19,10 +19,15 @@ CASES = [
     ("fail_baro", ["--seed", "1", "--fail", "baro", "--fail-at", "40"]),
     ("fail_imu", ["--seed", "1", "--fail", "imu", "--fail-at", "40"]),
     ("false_release", ["--seed", "1", "--false-release", "70"]),
-    ("low_release", ["--seed", "1", "--h-top", "200"]),
+    ("low_release", ["--seed", "1", "--release-alt", "200"]),
     ("gate_delay", ["--seed", "1", "--fall-tilt", "60", "--fall-tilt-until-h", "214"]),
     ("tilt_backup", ["--seed", "1", "--fall-tilt", "70"]),
     ("fast_fall", ["--seed", "1", "--fall-tilt", "70", "--v-terminal", "60"]),
+    # Modos de despliegue B (100 m -> 50 m) y C (tinaco, 8 m)
+    ("mode_b_seed1", ["--seed", "1", "--mode", "B"]),
+    ("mode_b_seed7", ["--seed", "7", "--mode", "B"]),
+    ("mode_b_low", ["--seed", "1", "--mode", "B", "--release-alt", "80"]),
+    ("tinaco", ["--seed", "1", "--mode", "C"]),
 ]
 
 for name, extra in CASES:

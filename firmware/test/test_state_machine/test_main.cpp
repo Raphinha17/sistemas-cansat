@@ -25,6 +25,35 @@ static SmInput base(uint32_t t) {
   return in;
 }
 
+// Sube a 6 m/s desde 30 m hasta h_top y suelta: baja g y vz cayendo durante hasta 2 s.
+// Devuelve el tiempo actual. *h_out: altura final.
+static uint32_t climbAndDrop(StateMachine &sm, float h_top, float *h_out = nullptr) {
+  uint32_t t = 0;
+  sm.begin(t);
+  for (; t < 2000; t += 10) sm.step(base(t));  // 0 -> 1
+  TEST_ASSERT_EQUAL(ST_TIERRA, sm.state());
+  float h = 30;
+  for (; h < h_top; t += 10, h += 0.06f) {
+    SmInput in = base(t);
+    in.h = h;
+    in.vz = 6;
+    sm.step(in);
+  }
+  TEST_ASSERT_EQUAL(ST_ASCENSO, sm.state());
+  float vz = 0;
+  for (int i = 0; i < 200 && sm.state() == ST_ASCENSO; i++, t += 10) {
+    SmInput in = base(t);
+    vz -= 0.098f;
+    h += vz * 0.01f;
+    in.h = h;
+    in.vz = vz;
+    in.acc_g = 0.05f;
+    sm.step(in);
+  }
+  if (h_out) *h_out = h;
+  return t;
+}
+
 // Lleva la máquina hasta CAIDA con una liberación a 450 m. Devuelve el tiempo actual.
 static uint32_t toCaida(StateMachine &sm) {
   uint32_t t = 0;
@@ -384,6 +413,225 @@ static void test_demo() {
   TEST_ASSERT_FALSE(e.cmd().power);
 }
 
+// ---------------------------------------------------------------------------
+// Modos de despliegue
+// ---------------------------------------------------------------------------
+static void test_modos_parametros() {
+  const DeployParams a = deployParams(DEPLOY_MODE_A), b = deployParams(DEPLOY_MODE_B),
+                     c = deployParams(DEPLOY_MODE_C);
+  TEST_ASSERT_EQUAL_FLOAT(200.0f, a.deploy_alt_m);
+  TEST_ASSERT_EQUAL_FLOAT(240.0f, a.release_min_m);  // DEPLOY_ALT + 40
+  TEST_ASSERT_EQUAL_FLOAT(50.0f, b.deploy_alt_m);
+  TEST_ASSERT_EQUAL_FLOAT(90.0f, b.release_min_m);
+  TEST_ASSERT_FALSE(a.immediate || b.immediate);
+  TEST_ASSERT_TRUE(c.immediate);
+  DeployMode m;
+  TEST_ASSERT_TRUE(deployModeFromChar('b', m));
+  TEST_ASSERT_EQUAL(DEPLOY_MODE_B, m);
+  TEST_ASSERT_EQUAL('C', deployModeChar(DEPLOY_MODE_C));
+  TEST_ASSERT_FALSE(deployModeFromChar('D', m));
+  TEST_ASSERT_EQUAL(DEPLOY_MODE_A, deployModeDefault());
+  // El modo es configuración: sobrevive a begin() y a beginRecovered()
+  StateMachine sm;
+  TEST_ASSERT_EQUAL(DEPLOY_MODE_A, sm.deployMode());
+  sm.setDeployMode(DEPLOY_MODE_B);
+  sm.begin(0);
+  TEST_ASSERT_EQUAL(DEPLOY_MODE_B, sm.deployMode());
+  MissionRecord rec;
+  rec.mission = 1;
+  rec.state = ST_ASCENSO;
+  sm.beginRecovered(rec, 0);
+  TEST_ASSERT_EQUAL(DEPLOY_MODE_B, sm.deployMode());
+}
+
+static void test_modo_b_altura_minima_90() {
+  // Soltado a 95 m: liberación válida en B (> 90 m) y no en A (< 240 m).
+  StateMachine b;
+  b.setDeployMode(DEPLOY_MODE_B);
+  climbAndDrop(b, 95);
+  TEST_ASSERT_EQUAL(ST_CAIDA, b.state());
+  StateMachine a;
+  climbAndDrop(a, 95);
+  TEST_ASSERT_EQUAL(ST_ASCENSO, a.state());
+  TEST_ASSERT_TRUE(a.out().lowg_descartadas > 0);
+  // Soltado a 85 m: en B tampoco.
+  StateMachine b2;
+  b2.setDeployMode(DEPLOY_MODE_B);
+  climbAndDrop(b2, 85);
+  TEST_ASSERT_EQUAL(ST_ASCENSO, b2.state());
+}
+
+static void test_modo_b_h_disp_y_respaldo() {
+  StateMachine sm;
+  sm.setDeployMode(DEPLOY_MODE_B);
+  uint32_t t = climbAndDrop(sm, 100);
+  TEST_ASSERT_EQUAL(ST_CAIDA, sm.state());
+  // h_disp = 50 + |vz| * 0.5: con vz = -24, 62 m. A 62.5 m no dispara; a 61.9 sí.
+  SmInput in = base(t);
+  in.h = 62.5f;
+  in.vz = -24;
+  sm.step(in);
+  TEST_ASSERT_EQUAL(ST_CAIDA, sm.state());
+  TEST_ASSERT_FLOAT_WITHIN(0.01f, 62.0f, sm.out().h_disp);
+  in = base(t += 10);
+  in.h = 61.9f;
+  in.vz = -24;
+  sm.step(in);
+  TEST_ASSERT_EQUAL(ST_DESPLIEGUE, sm.state());
+  TEST_ASSERT_EQUAL(0, sm.out().flags & FLAG_DISPARO_RESPALDO);
+  // Respaldo de altura en B: inclinado siempre, dispara en el primer ciclo bajo 40 m.
+  StateMachine r;
+  r.setDeployMode(DEPLOY_MODE_B);
+  t = climbAndDrop(r, 100);
+  float h = 45;
+  for (int i = 0; i < 100 && r.state() == ST_CAIDA; i++, t += 10, h -= 0.6f) {
+    in = base(t);
+    in.h = h;
+    in.vz = -60;  // h_disp = 80 m: ya por debajo, la compuerta (80°) no se cumple
+    in.tilt_deg = 80;
+    r.step(in);
+  }
+  TEST_ASSERT_EQUAL(ST_DESPLIEGUE, r.state());
+  TEST_ASSERT_TRUE(r.out().flags & FLAG_DISPARO_RESPALDO);
+  TEST_ASSERT_TRUE(h + 0.6f <= DEPLOY_RESPALDO_B_M && h + 0.6f > DEPLOY_RESPALDO_B_M - 0.7f);
+}
+
+static void test_modo_b_sin_baro() {
+  // Barómetro muerto en B: disparo DEPLOY_T_SIN_BARO_B_S después de la liberación.
+  StateMachine sm;
+  sm.setDeployMode(DEPLOY_MODE_B);
+  uint32_t t = climbAndDrop(sm, 100);
+  TEST_ASSERT_EQUAL(ST_CAIDA, sm.state());
+  const uint32_t t_rel = sm.tRelease();
+  for (int i = 0; i < 500 && sm.state() == ST_CAIDA; i++, t += 10) {
+    SmInput in = base(t);
+    in.baro_ok = false;
+    in.vz = -20;
+    sm.step(in);
+  }
+  TEST_ASSERT_EQUAL(ST_DESPLIEGUE, sm.state());
+  TEST_ASSERT_EQUAL_UINT32(t_rel + (uint32_t)(DEPLOY_T_SIN_BARO_B_S * 1000), sm.tFire());
+  TEST_ASSERT_TRUE(sm.out().flags & FLAG_DISPARO_RESPALDO);
+}
+
+static void test_modo_c_desde_tierra() {
+  // En C la caída libre se detecta en TIERRA (sin subir 20 m), sin confirmación por vz,
+  // sin altura mínima y sin compuerta: CAIDA y, en el ciclo siguiente, el disparo.
+  StateMachine sm;
+  sm.setDeployMode(DEPLOY_MODE_C);
+  sm.begin(0);
+  uint32_t t = 0;
+  for (; t < 2000; t += 10) sm.step(base(t));
+  TEST_ASSERT_EQUAL(ST_TIERRA, sm.state());
+  // Un toque breve de baja g (< 150 ms) no cuenta
+  for (int i = 0; i < 10; i++, t += 10) {
+    SmInput in = base(t);
+    in.h = 3;
+    in.acc_g = 0.1f;
+    sm.step(in);
+  }
+  sm.step(base(t += 10));
+  TEST_ASSERT_EQUAL(ST_TIERRA, sm.state());
+  bool froze = false;
+  int n = 0;
+  for (; n < 30 && sm.state() == ST_TIERRA; n++, t += 10) {
+    SmInput in = base(t);
+    in.h = 5;
+    in.vz = -0.5f;      // apenas cayendo: no hace falta vz < -8
+    in.acc_g = 0.1f;
+    in.tilt_deg = 90;   // la compuerta no se aplica
+    sm.step(in);
+    froze |= sm.out().ev_freeze_p0;
+  }
+  TEST_ASSERT_EQUAL(ST_CAIDA, sm.state());
+  TEST_ASSERT_EQUAL(16, n);  // 150 ms de baja g (16 muestras a 10 ms)
+  TEST_ASSERT_TRUE(froze);
+  TEST_ASSERT_EQUAL(1, sm.record().mission);
+  TEST_ASSERT_TRUE(sm.out().flags & FLAG_LIBERACION);
+  SmInput in = base(t);
+  in.h = 4.5f;
+  in.vz = -1.5f;
+  in.acc_g = 0.1f;
+  in.tilt_deg = 90;
+  sm.step(in);
+  TEST_ASSERT_EQUAL(ST_DESPLIEGUE, sm.state());
+  TEST_ASSERT_EQUAL(FLAG_DISPARO, sm.out().flags & (FLAG_DISPARO | FLAG_DISPARO_RESPALDO));
+  TEST_ASSERT_EQUAL_UINT32(t, sm.tFire());
+  // En los modos A y B la misma caída en TIERRA no hace nada
+  StateMachine a;
+  a.begin(0);
+  for (t = 0; t < 2000; t += 10) a.step(base(t));
+  for (int i = 0; i < 100; i++, t += 10) {
+    SmInput x = base(t);
+    x.h = 5;
+    x.acc_g = 0.1f;
+    a.step(x);
+  }
+  TEST_ASSERT_EQUAL(ST_TIERRA, a.state());
+}
+
+// ---------------------------------------------------------------------------
+// Botón PRG y LED del modo demo
+// ---------------------------------------------------------------------------
+static void test_toque_largo() {
+  LongPress b(1000);
+  uint32_t t = 0;
+  int hits = 0;
+  // Toque corto (0.5 s): nada
+  for (; t < 500; t += 10) hits += b.step(true, t);
+  hits += b.step(false, t);
+  TEST_ASSERT_EQUAL(0, hits);
+  // Toque largo de 3 s: una sola detección, al cumplir 1 s
+  const uint32_t t0 = t += 10;
+  uint32_t t_hit = 0;
+  for (; t < t0 + 3000; t += 10)
+    if (b.step(true, t)) {
+      hits++;
+      t_hit = t;
+    }
+  TEST_ASSERT_EQUAL(1, hits);
+  TEST_ASSERT_EQUAL_UINT32(t0 + 1000, t_hit);
+  // Un rebote (suelto 10 ms) reinicia la cuenta
+  b.step(false, t);
+  for (t += 10; t < t0 + 3700; t += 10) hits += b.step(true, t);
+  b.step(false, t);
+  for (t += 10; t < t0 + 4000; t += 10) hits += b.step(true, t);
+  TEST_ASSERT_EQUAL(1, hits);
+}
+
+static void test_demo_toggle_y_led() {
+  DemoSeparation d;
+  TEST_ASSERT_FALSE(d.ledOn(0));
+  d.toggle(1000);  // primer toque largo: arma
+  TEST_ASSERT_TRUE(d.counting());
+  // Parpadeo rápido: medio periodo DEMO_LED_PARPADEO_MS
+  TEST_ASSERT_TRUE(d.ledOn(1000));
+  TEST_ASSERT_FALSE(d.ledOn(1000 + DEMO_LED_PARPADEO_MS));
+  TEST_ASSERT_TRUE(d.ledOn(1000 + 2 * DEMO_LED_PARPADEO_MS));
+  d.step(5000, false);
+  d.toggle(5000);  // segundo toque antes de terminar: cancela
+  TEST_ASSERT_FALSE(d.armed());
+  for (uint32_t t = 5000; t < 20000; t += 10) d.step(t, false);
+  TEST_ASSERT_FALSE(d.fired());
+  TEST_ASSERT_FALSE(d.ledOn(20000));
+  TEST_ASSERT_FALSE(d.cmd().power);
+  // Arma otra vez y deja terminar: dispara a los DEMO_DELAY_S; el LED queda fijo
+  d.toggle(20000);
+  uint32_t t_fire = 0;
+  for (uint32_t t = 20000; t < 20000 + DEMO_DELAY_S * 1000 + 3000; t += 10) {
+    d.step(t, false);
+    if (d.evFire()) t_fire = t;
+  }
+  TEST_ASSERT_EQUAL_UINT32(20000 + DEMO_DELAY_S * 1000, t_fire);
+  TEST_ASSERT_TRUE(d.fired());
+  TEST_ASSERT_TRUE(d.ledOn(t_fire + 3000));
+  TEST_ASSERT_TRUE(d.ledOn(t_fire + 3000 + DEMO_LED_PARPADEO_MS));
+  // Tras el disparo, un toque largo re-arma (nueva toma)
+  d.toggle(40000);
+  TEST_ASSERT_TRUE(d.counting());
+  TEST_ASSERT_FALSE(d.fired());
+}
+
 int main(int, char **) {
   UNITY_BEGIN();
   RUN_TEST(test_servo_sin_energia_hasta_caida);
@@ -399,5 +647,12 @@ int main(int, char **) {
   RUN_TEST(test_servo_reintentos);
   RUN_TEST(test_servo_pulso);
   RUN_TEST(test_demo);
+  RUN_TEST(test_modos_parametros);
+  RUN_TEST(test_modo_b_altura_minima_90);
+  RUN_TEST(test_modo_b_h_disp_y_respaldo);
+  RUN_TEST(test_modo_b_sin_baro);
+  RUN_TEST(test_modo_c_desde_tierra);
+  RUN_TEST(test_toque_largo);
+  RUN_TEST(test_demo_toggle_y_led);
   return UNITY_END();
 }

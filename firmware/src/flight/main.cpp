@@ -13,8 +13,15 @@
 //  - Normal (vuelo).
 //  - Simulación por serial (docs/sim_input.md): al recibir una línea "SIM,..." en los
 //    estados 0 o 1, el lazo usa esos valores en lugar de los sensores (prueba B5).
-//  - DEMO_SEPARACION (entorno heltec_demo): ARMAR o el reed disparan el servo
-//    DEMO_DELAY_S segundos después. El modo de vuelo no cambia.
+//  - DEMO_SEPARACION (entornos heltec_demo y heltec_banco): ARMAR o un toque largo
+//    (1 s) del botón PRG arman la cuenta regresiva; el servo se dispara DEMO_DELAY_S
+//    segundos después. Otro toque largo durante la cuenta cancela. LED de la placa:
+//    parpadeo rápido durante la cuenta, fijo tras el disparo. El modo de vuelo no cambia
+//    y no usa el botón ni el LED.
+//  - Modo de despliegue A, B o C (comando MODO, guardado en NVS; ver config.h).
+//
+// Encendido: interruptor deslizable en la línea de la pila; al encender, la placa
+// arranca y entra sola a AUTOPRUEBA -> TIERRA (sin armado).
 //
 // Comandos por serial (115200, terminados en salto de línea):
 //   TX1           telemetría según el estado (por defecto)
@@ -24,8 +31,9 @@
 //   BORRAR        borra el log
 //   MISION        muestra el registro de misión guardado en NVS
 //   MISION_BORRAR borra el registro de misión y reinicia la placa
+//   MODO          muestra el modo de despliegue; MODO A|B|C lo cambia (estados 0 y 1)
 //   SIM_FIN       sale del modo simulación (vuelve a los sensores y recalibra)
-//   ARMAR         (solo DEMO_SEPARACION) arma la cuenta regresiva del servo
+//   ARMAR         (solo DEMO_SEPARACION) arma (o re-arma) la cuenta regresiva del servo
 //   DESARMAR      (solo DEMO_SEPARACION) cancela la cuenta regresiva
 #include <Arduino.h>
 
@@ -54,6 +62,7 @@ static volatile bool tx_test = false;  // comando TX5
 // Peticiones de comms a control (las atiende control al inicio del ciclo)
 static volatile bool req_sim_on = false, req_sim_off = false;
 static volatile bool req_demo_arm = false, req_demo_disarm = false;
+static volatile int8_t req_mode = -1;  // DeployMode pedido por el comando MODO (-1: nada)
 static volatile bool sim_mode = false;
 static volatile bool req_flush = false;
 
@@ -63,6 +72,8 @@ static volatile uint32_t pub_fire_ms = 0, pub_fire_count = 0;
 static volatile float pub_h = 0, pub_vz = 0, pub_hmax = 0, pub_tilt = 0, pub_demo_rest = 0;
 static volatile uint8_t pub_servo_int = 0;
 static volatile bool pub_servo_conf = false, pub_servo_on = false, pub_vz_fuera = false;
+static volatile uint8_t pub_mode = DEPLOY_MODE_A;  // modo de despliegue aplicado
+static volatile uint8_t pub_demo = 0;              // 0 sin armar, 1 cuenta, 2 disparado
 
 // Estadísticas (escritas por control, leídas por comms solo para diagnóstico)
 static volatile uint32_t st_cycles = 0, st_overruns = 0, st_max_us = 0;
@@ -86,10 +97,8 @@ static void controlTask(void *) {
   uint32_t cycle = 0, last_tx = 0, last_log = 0;
   uint32_t rec_seq = core.recordSeq();
   bool sim_fresh = false;
-#if defined(DEMO_SEPARACION) && (PIN_REED >= 0)
-  bool reed_stable = digitalRead(PIN_REED) == REED_ACTIVE_LEVEL;  // sin flanco al arrancar
-  bool reed_last = reed_stable;
-  uint32_t reed_change_ms = millis();
+#ifdef DEMO_SEPARACION
+  LongPress boton(DEMO_BOTON_MS);
 #endif
 
   for (;;) {
@@ -98,6 +107,13 @@ static void controlTask(void *) {
       req_sim_on = false;
       sim_mode = true;
       sim_fresh = true;
+    }
+    // Modo de despliegue: solo en AUTOPRUEBA o TIERRA (nunca con la misión en curso).
+    if (req_mode >= 0) {
+      const int8_t m = req_mode;
+      req_mode = -1;
+      if (core.state() <= ST_TIERRA) core.setDeployMode((DeployMode)m);
+      pub_mode = core.deployMode();
     }
     if (req_sim_off) {
       req_sim_off = false;
@@ -153,7 +169,7 @@ static void controlTask(void *) {
       }
     }
 
-    // --- Demo: armado por comando o por el reed (flanco hacia "imán presente") ---
+    // --- Demo: armado por comando o por toque largo del botón PRG ---
     if (req_demo_arm) {
       req_demo_arm = false;
       core.demoArm(in.t_ms);
@@ -162,23 +178,18 @@ static void controlTask(void *) {
       req_demo_disarm = false;
       core.demoDisarm();
     }
-#if defined(DEMO_SEPARACION) && (PIN_REED >= 0)
-    {
-      const bool r = digitalRead(PIN_REED) == REED_ACTIVE_LEVEL;
-      if (r != reed_last) {
-        reed_last = r;
-        reed_change_ms = millis();
-      } else if (r != reed_stable && millis() - reed_change_ms >= REED_ANTIRREBOTE_MS) {
-        reed_stable = r;
-        if (r) core.demoArm(in.t_ms);
-      }
-    }
+#ifdef DEMO_SEPARACION
+    // Activo en bajo. El tiempo del toque es el reloj real (también en modo simulación).
+    if (boton.step(digitalRead(PIN_BOTON_PRG) == LOW, millis())) core.demoToggle(in.t_ms);
 #endif
 
     // --- Núcleo: filtros + máquina de estados ---
     core.step(in);
     cycle++;
     servo_hw::apply(core.servo());
+#ifdef DEMO_SEPARACION
+    digitalWrite(PIN_LED_PLACA, core.demo().ledOn(in.t_ms) ? HIGH : LOW);
+#endif
 
     if (core.evFlushLog()) req_flush = true;
     if (core.recordSeq() != rec_seq) {
@@ -237,6 +248,7 @@ static void controlTask(void *) {
     pub_servo_conf = so.servo_confirmado;
     pub_vz_fuera = so.vz_fuera_rango;
     pub_demo_rest = core.demo().remainingS(in.t_ms);
+    pub_demo = core.demo().counting() ? 1 : core.demo().fired() ? 2 : 0;
 
     const uint32_t us = micros() - t0;
     if (us > st_max_us) st_max_us = us;
@@ -253,6 +265,18 @@ static void printRecord(const MissionRecord &r) {
                 "sesgo_giro=%.3f,%.3f,%.3f\n",
                 r.mission, r.state, r.flags, r.p0_pa, r.p0_valid, r.h_max_m, r.gyro_bias[0],
                 r.gyro_bias[1], r.gyro_bias[2]);
+}
+
+static void printMode(DeployMode m) {
+  const DeployParams p = deployParams(m);
+  if (p.immediate)
+    Serial.printf("despliegue=%c (tinaco: disparo al detectar la caida libre, sin altura "
+                  "minima ni compuerta)\n",
+                  deployModeChar(m));
+  else
+    Serial.printf("despliegue=%c (liberacion valida > %.0f m, autogiro a %.0f m, "
+                  "respaldo %.0f m)\n",
+                  deployModeChar(m), p.release_min_m, p.deploy_alt_m, p.backup_alt_m);
 }
 
 static void handleSim(const char *line) {
@@ -282,6 +306,7 @@ static void handleCommand(const String &cmd) {
     tx_test = true;
     Serial.println("OK TX 5 Hz en estados 0 y 1");
   } else if (cmd == "STAT") {
+    printMode((DeployMode)pub_mode);
     Serial.printf("estado=%u banderas=0x%02X h=%.1f vz=%.1f h_max=%.1f incl=%.0f modo=%s%s\n",
                   pub_state, pub_flags, pub_h, pub_vz, pub_hmax, pub_tilt,
                   sim_mode ? "SIM" : "sensores", core.demoEnabled() ? " DEMO" : "");
@@ -318,12 +343,27 @@ static void handleCommand(const String &cmd) {
     Serial.flush();
     delay(100);
     ESP.restart();
+  } else if (cmd == "MODO") {
+    printMode((DeployMode)pub_mode);
+  } else if (cmd.startsWith("MODO ")) {
+    DeployMode m;
+    String arg = cmd.substring(5);
+    arg.trim();
+    if (arg.length() != 1 || !deployModeFromChar(arg[0], m)) {
+      Serial.println("ERR uso: MODO A|B|C");
+    } else if (pub_state > ST_TIERRA) {
+      Serial.println("ERR el modo solo se cambia en los estados 0 y 1 (en tierra)");
+    } else if ((uint8_t)m == pub_mode) {
+      Serial.printf("OK modo %c (sin cambios)\n", deployModeChar(m));
+    } else {
+      req_mode = (int8_t)m;  // lo aplica control; comms lo guarda en NVS y en el log
+    }
   } else if (cmd == "SIM_FIN") {
     req_sim_off = true;
     Serial.println("OK fin del modo simulacion (recalibrando con sensores)");
   } else if (cmd == "ARMAR" || cmd == "DESARMAR") {
     if (!core.demoEnabled()) {
-      Serial.println("ERR solo en el modo DEMO_SEPARACION (entorno heltec_demo)");
+      Serial.println("ERR solo en el modo DEMO_SEPARACION (heltec_demo o heltec_banco)");
     } else if (cmd == "ARMAR") {
       req_demo_arm = true;
       Serial.printf("OK armado: disparo en %d s\n", DEMO_DELAY_S);
@@ -332,8 +372,8 @@ static void handleCommand(const String &cmd) {
       Serial.println("OK desarmado");
     }
   } else if (cmd.length()) {
-    Serial.println("Comandos: TX1 TX5 STAT DUMP BORRAR MISION MISION_BORRAR SIM_FIN"
-                   " ARMAR DESARMAR | lineas SIM,... (docs/sim_input.md)");
+    Serial.println("Comandos: TX1 TX5 STAT DUMP BORRAR MISION MISION_BORRAR MODO [A|B|C]"
+                   " SIM_FIN ARMAR DESARMAR | lineas SIM,... (docs/sim_input.md)");
   }
 }
 
@@ -344,6 +384,8 @@ static void commsTask(void *) {
   uint32_t last_flush = millis();
   uint8_t last_state = 0xFF;
   uint32_t last_fire_count = 0;
+  uint8_t saved_mode = pub_mode;  // el modo con que arrancó (ya está en NVS o es el default)
+  uint8_t last_demo = 0;
   TelemetryPacket pkt;
   MissionRecord rec;
   for (;;) {
@@ -367,6 +409,24 @@ static void commsTask(void *) {
     if (pub_state != last_state) {
       last_state = pub_state;
       Serial.printf("# ESTADO %u banderas=0x%02X\n", last_state, pub_flags);
+    }
+    if (pub_mode != saved_mode) {
+      // Modo nuevo aplicado por control: se guarda en NVS y queda en el log.
+      saved_mode = pub_mode;
+      const bool ok = mission_store::saveMode((DeployMode)saved_mode);
+      logger::appendEvent(LOG_EV_MODO, (uint8_t)deployModeChar((DeployMode)saved_mode),
+                          millis());
+      Serial.printf("OK modo %c%s\n", deployModeChar((DeployMode)saved_mode),
+                    ok ? " (guardado en NVS)" : " (ERROR al guardar en NVS)");
+      printMode((DeployMode)saved_mode);
+    }
+    if (pub_demo != last_demo) {
+      if (pub_demo == 1)
+        Serial.printf("# DEMO ARMADO: disparo en %d s (toque largo de PRG o DESARMAR cancela)\n",
+                      DEMO_DELAY_S);
+      else if (last_demo == 1 && pub_demo == 0)
+        Serial.println("# DEMO CANCELADO");
+      last_demo = pub_demo;
     }
     if (pub_fire_count != last_fire_count) {
       last_fire_count = pub_fire_count;
@@ -401,11 +461,24 @@ static void commsTask(void *) {
 
 void setup() {
   power::begin();  // primero: servo sin energía y señal con pull-down
+#ifdef DEMO_SEPARACION
+  static_assert(PIN_LED_PLACA == LED_BUILTIN, "PIN_LED_PLACA debe ser el LED de la variante");
+  pinMode(PIN_BOTON_PRG, INPUT_PULLUP);
+  pinMode(PIN_LED_PLACA, OUTPUT);
+  digitalWrite(PIN_LED_PLACA, LOW);
+#endif
   Serial.begin(115200);
   delay(200);
 #ifdef DEMO_SEPARACION
-  Serial.printf("CanSat Hellmary - MODO DEMO_SEPARACION (disparo %d s tras ARMAR o reed)\n",
-                DEMO_DELAY_S);
+  Serial.printf("CanSat Hellmary - MODO DEMO_SEPARACION (disparo %d s tras ARMAR o toque "
+                "largo de PRG)%s\n",
+                DEMO_DELAY_S,
+#ifdef CANSAT_BANCO
+                " - BANCO: sin medicion de bateria. NO USAR PARA VUELO"
+#else
+                ""
+#endif
+  );
 #else
   Serial.println("CanSat Hellmary - firmware de vuelo");
 #endif
@@ -417,6 +490,15 @@ void setup() {
   const int16_t rs = telemetry::begin();
   Serial.printf("Radio %s (codigo %d)\n", rs == 0 ? "OK" : "FALLA", rs);
   Serial.printf("NVS %s\n", mission_store::begin() ? "OK" : "FALLA");
+
+  // Modo de despliegue guardado (o el de config.h). Queda en el log en cada arranque.
+  DeployMode mode = deployModeDefault();
+  const bool mode_saved = mission_store::loadMode(mode);
+  core.setDeployMode(mode);
+  pub_mode = mode;
+  Serial.print(mode_saved ? "Modo guardado: " : "Modo por defecto: ");
+  printMode(mode);
+  logger::appendEvent(LOG_EV_ARRANQUE, (uint8_t)deployModeChar(mode), millis());
 
   // Reinicio en vuelo: si hay una misión en curso en NVS, se recupera sin recalibrar.
   boot_recovered = mission_store::load(boot_rec) && boot_rec.mission;

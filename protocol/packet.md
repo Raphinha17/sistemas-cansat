@@ -38,10 +38,26 @@ Tamaño fijo: **32 bytes**, little-endian, sin relleno.
 | 6   | fallo imu            |
 | 7   | NO-GO                |
 
-En el firmware de demostración (`DEMO_SEPARACION`, entorno `heltec_demo`) el bit 2
+En el firmware de demostración (`DEMO_SEPARACION`, entornos `heltec_demo` y `heltec_banco`) el bit 2
 (disparo) marca la separación del modo demo. El log guarda un registro en el ciclo exacto
 de la separación (el primero con ese bit); en la telemetría el bit aparece en el
 siguiente paquete (<= 200 ms).
+
+## Log de la placa (`/vuelo.bin`, comando `DUMP`)
+Registros de 32 B: los paquetes de arriba (byte 0 = versión, 1) y **registros de evento**,
+que no se transmiten y empiezan con `0xEE` en lugar de la versión:
+
+| Offset | Tamaño | Tipo | Campo   | Valor |
+|-------:|-------:|------|---------|-------|
+| 0      | 1      | u8   | marca   | `0xEE` |
+| 1      | 1      | u8   | tipo    | 1 = arranque, 2 = cambio de modo de despliegue |
+| 2      | 1      | u8   | valor   | modo de despliegue en ASCII (`'A'`, `'B'` o `'C'`) |
+| 3      | 1      | u8   | —       | 0 |
+| 4      | 4      | u32  | t_ms    | ms desde el arranque |
+| 8      | 24     | —    | —       | ceros |
+
+Decodificación: `decode_log_event()` en `protocol/telemetry.py` (devuelve `None` si el
+registro es un paquete).
 
 ## Salida USB del receptor (`rx_station`)
 Una línea por paquete, a 115200 baudios:
