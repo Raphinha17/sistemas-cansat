@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Project Hellmary — Estación terrena</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/static/vendor/uPlot.min.css">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div id="app">
+
+  <!-- Encabezado: marca, enlace, cronómetro de misión, grabación -->
+  <header id="top">
+    <div class="brand">
+      <div class="title">PROJECT HELLMARY</div>
+      <div class="sub">Estación terrena · <span id="src">—</span></div>
+    </div>
+
+    <div class="linkbox">
+      <div id="linkpill" class="pill wait">SIN DATOS</div>
+      <div class="mini"><span>RSSI</span><b id="m-rssi">—</b><i>dBm</i></div>
+      <div class="mini"><span>SNR</span><b id="m-snr">—</b><i>dB</i></div>
+      <div class="mini"><span>PÉRDIDA</span><b id="m-loss">—</b><i id="m-lostn">%</i></div>
+      <div class="mini"><span>PAQUETES</span><b id="m-rx">0</b><i class="tech" id="m-pps"></i></div>
+    </div>
+
+    <div class="clock"><span>TIEMPO DE MISIÓN</span><b id="clock">T+ 00:00</b></div>
+
+    <div class="rec">
+      <div class="recrow">
+        <div id="recstate" class="recstate off">○ SIN GRABAR</div>
+        <button id="exportbtn" class="small tech" title="Descarga el CSV de la sesión actual">Exportar CSV</button>
+      </div>
+      <div class="recbtns tech">
+        <button id="recbtn" class="recbtn start">INICIAR TOMA DE DATOS</button>
+      </div>
+    </div>
+
+    <div class="logowrap"><img id="logo" src="/logo" alt="Logotipo del equipo"></div>
+    <button id="videobtn" class="ghost" title="Modo pantalla de video (V)">▣ VIDEO</button>
+  </header>
+
+  <!-- Línea de tiempo de estados -->
+  <section id="timeline"></section>
+
+  <main id="main">
+    <!-- Tarjetas -->
+    <section id="cards">
+      <div class="card" id="c-h"><div class="lbl">ALTURA</div>
+        <div class="val"><b id="v-h">—</b><span class="unit">m</span></div><div class="sub">sobre el suelo (p0)</div></div>
+      <div class="card" id="c-vz"><div class="lbl">VELOCIDAD VERTICAL <small>prom. 1 s</small></div>
+        <div class="val"><b id="v-vz">—</b><span class="unit">m/s</span></div>
+        <div class="sub" id="s-vz">descenso esperado 8 a 12 m/s</div></div>
+      <div class="card" id="c-hmax"><div class="lbl">ALTURA MÁXIMA</div>
+        <div class="val"><b id="v-hmax">—</b><span class="unit">m</span></div><div class="sub">registrada</div></div>
+      <div class="card" id="c-p"><div class="lbl">PRESIÓN</div>
+        <div class="val"><b id="v-p">—</b><span class="unit">hPa</span></div><div class="sub" id="s-p">&nbsp;</div></div>
+      <div class="card" id="c-t"><div class="lbl">TEMPERATURA</div>
+        <div class="val"><b id="v-t">—</b><span class="unit">°C</span></div><div class="sub">&nbsp;</div></div>
+      <div class="card" id="c-b"><div class="lbl">BATERÍA</div>
+        <div class="val"><b id="v-b">—</b><span class="unit" id="u-b">V</span></div><div class="sub" id="s-b">&nbsp;</div></div>
+    </section>
+
+    <!-- Gráficas -->
+    <section id="charts">
+      <div class="toolbar tech" id="chartbar">
+        <span class="tl">GRÁFICAS</span>
+        <button class="small win" data-win="30">30 s</button>
+        <button class="small win active" data-win="120">2 min</button>
+        <button class="small win" data-win="300">5 min</button>
+        <button class="small win" data-win="0">Todo</button>
+        <button class="small" id="pausebtn" title="Pausar las gráficas para revisar (P)">⏸ Pausar</button>
+      </div>
+      <div class="chart" id="ch-h"><div class="ct">ALTURA <small>m</small></div><div class="plot"></div></div>
+      <div class="chart" id="ch-vz"><div class="ct">VEL. VERTICAL <small>m/s · banda verde: 8 a 12</small></div><div class="plot"></div></div>
+      <div class="chart" id="ch-a"><div class="ct">ACELERACIÓN <small>g</small></div><div class="plot"></div></div>
+      <div class="chart" id="ch-att"><div class="ct">ACTITUD <small>grados</small></div><div class="plot"></div></div>
+      <div id="pausetag" hidden>PAUSADO</div>
+    </section>
+
+    <!-- Costado: actitud, banderas, eventos -->
+    <aside id="side">
+      <section class="panel" id="attpanel">
+        <div class="ct">ACTITUD DEL CUERPO <small>yaw relativo</small></div>
+        <canvas id="att"></canvas>
+        <div class="attnum">
+          <div><span>ROLL</span><b id="a-ro">—</b></div>
+          <div><span>PITCH</span><b id="a-pi">—</b></div>
+          <div><span>YAW</span><b id="a-ya">—</b></div>
+          <div id="a-incl"><span>INCLINACIÓN</span><b id="a-in">—</b></div>
+        </div>
+      </section>
+      <section class="panel tech" id="flagpanel">
+        <div class="ct">BANDERAS</div>
+        <div id="flags"></div>
+      </section>
+      <section class="panel tech" id="evpanel">
+        <div class="ct">REGISTRO DE EVENTOS <button class="small" id="resetbtn" title="Borra estadísticas y gráficas (no borra archivos)">Reiniciar</button></div>
+        <ul id="events"></ul>
+        <div class="techstats" id="techstats"></div>
+      </section>
+    </aside>
+  </main>
+
+  <div id="banner" hidden></div>
+</div>
+
+<script src="/static/vendor/uPlot.iife.min.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>

@@ -306,6 +306,67 @@ dispara de inmediato".
 lo mismo; la diferencia aparece si se activa la medición de la pila.
 - SUPOSICIÓN: se queda (se pidió). Aviso: NUNCA para vuelo (modo demo y sin batería).
 
+## Estación terrena (etapa 4, `ground/`)
+
+**P36. Baudios y formato.** `rx_station` usa `Serial.begin(115200)` (verificado en
+`firmware/src/rx/main.cpp`).
+- SUPOSICIÓN: la línea `HEX,RSSI,SNR` (P14) es la única que se interpreta; `# ...` son
+  mensajes y se ignoran, `ERR,...` cuenta como error de radio, y cualquier otra cosa se
+  cuenta como línea inválida y se descarta. El paquete no lleva CRC, así que además se
+  exige versión = 1 y estado 0 a 6 para aceptarlo.
+
+**P37. Tiempo de misión.** La SPEC no dice cuándo empieza.
+- SUPOSICIÓN: reloj de la placa (`t_ms`) desde el *primer paquete recibido* de la sesión
+  (no desde el despegue); si la placa reinicia (`t_ms` retrocede) el tiempo continúa. La
+  línea de tiempo muestra la hora de la PC y el T+ de cada cambio de estado. ¿Prefieren
+  que el cronómetro arranque en ASCENSO o al pulsar INICIAR TOMA DE DATOS?
+
+**P38. Pérdida de paquetes.** Por salto de la secuencia (u16 con vuelta).
+- SUPOSICIÓN: % = perdidos / (recibidos + perdidos). Un salto hacia atrás o mayor de
+  30 000 se toma como reinicio de la placa y no cuenta como pérdida; los duplicados se
+  cuentan aparte. No se detectan los paquetes perdidos antes del primero ni después del
+  último. Los paquetes con error de CRC de LoRa (`ERR,...`) los descarta la radio y
+  aparecen como pérdida por secuencia. La tasa de paquetes es la de los últimos 5 s.
+
+**P39. Enlace perdido y velocidad vertical.** Más de 3 s sin paquetes válidos = enlace
+perdido (reloj de la PC; con `--speed` mayor que 1 en `--sim` o `--replay` esos 3 s
+siguen siendo reales). La velocidad vertical de la tarjeta es el promedio de 1 s (por
+`t_ms` de la placa).
+- SUPOSICIÓN: verde si el promedio está entre 8 y 12 m/s de descenso y ámbar fuera de
+  rango, solo en el estado DESCENSO (5); en los demás estados la tarjeta no se colorea.
+  Batería 0 se muestra como "N/D" sin alarma (la placa no mide la pila, P8b).
+
+**P40. Grabación.** Un CSV y un crudo por sesión en `ground/data/`.
+- SUPOSICIÓN: la grabación no empieza sola (salvo `--auto-record`): lo recibido antes de
+  pulsar INICIAR no se guarda (se ve en pantalla). FINALIZAR pide confirmación para
+  evitar un clic accidental. Exportar descarga el CSV de la sesión actual o, si ya
+  terminó, el de la última sesión. El CSV tiene `hora_pc`, `epoch_pc`, todas las
+  variables del paquete, `rssi_dbm`, `snr_db` y `estado_nombre`; `--replay` lee ese
+  formato. Cada línea se vacía a disco al llegar. ¿El reglamento pide algún formato o
+  campo específico?
+
+**P41. Interfaz.**
+- SUPOSICIÓN: se proyecta en 1920x1080 con el zoom del navegador al 100 %; todo escala
+  con la altura de la ventana (rem), pero solo se revisó en Edge (Chromium) a 1920x1080,
+  no en Firefox ni en pantallas 4:3. El servidor escucha en 127.0.0.1 sin contraseña; si
+  se necesita verlo desde otra laptop, usar `--host 0.0.0.0` en una red de confianza.
+- El indicador de actitud es un horizonte artificial con anillo de rumbo (yaw relativo,
+  0 = rumbo al arrancar). Con los signos de roll/pitch del firmware (P6) es aproximado:
+  validar el sentido de giro con el CanSat en la mano. En la gráfica el yaw se corta al
+  dar la vuelta en ±180° (el autogiro gira unos 90°/s).
+- Al recargar la página se recuperan los últimos ~6000 paquetes (~20 min a 5 Hz) y los
+  eventos; el CSV tiene todo desde que se pulsó INICIAR. El modo de despliegue (P31) no
+  viaja en el paquete, así que la estación no lo muestra.
+
+**P42. Logotipo.** `ground/static/logo.png` (el equipo debe poner el archivo). Sin él se
+muestra un marcador amarillo con la ruta.
+
+**P43. Pruebas sin la placa.** El puerto serie real no se pudo probar sin la placa
+receptora: se probó con un puerto inexistente (el servidor avisa y reintenta), con
+`--sim`, con `--replay` y con pruebas automáticas. Falta probar con la Heltec real: la
+reconexión al desenchufar y enchufar el USB y que el parser tolere el arranque de la
+placa (mensajes `#` y posible basura en la primera línea).
+
 ## Resueltas
 
 **P2. Reed y enclavamiento (DECISIÓN DE HARDWARE).** Ya no se usa interruptor reed ni

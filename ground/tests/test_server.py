@@ -1,0 +1,133 @@
+import asyncio
+import csv
+import json
+
+from fastapi.testclient import TestClient
+
+import gs_core as C
+import gs_sources as SRC
+import server as SV
+import telemetry as T
+
+
+class FakeSource(SRC.Source):
+    """Fuente quieta: las pruebas meten las líneas con station.handle_line."""
+    name = "FAKE"
+
+    async def run(self, on_line):
+        await asyncio.Event().wait()
+
+
+def _line(i, h=0.0, estado=1, flags=0):
+    p = T.Packet(estado=estado, secuencia=i, t_ms=i * 1000, altura_m=h, vz_ms=-9.0,
+                 banderas=flags, presion_pa=99000, temp_c=20.0, bateria_v=0.0)
+    return C.make_line(p, -55.0, 9.0)
+
+
+def _client(tmp_path):
+    st = SV.Station(FakeSource(), str(tmp_path / "data"))
+    return st, TestClient(SV.create_app(st))
+
+
+def feed(client, st, lines):
+    for l in lines:
+        client.portal.call(st.handle_line, l)
+
+
+def test_rest_estado_y_paginas(tmp_path):
+    st, app = _client(tmp_path)
+    with app as c:
+        r = c.get("/api/status").json()
+        assert r["s"]["link"] == "esperando" and r["rec"]["active"] is False
+        assert c.get("/").status_code == 200 and "PROJECT HELLMARY" in c.get("/").text
+        assert c.get("/static/vendor/uPlot.iife.min.js").status_code == 200   # sin CDN
+        assert c.get("/static/app.js").status_code == 200
+
+
+def test_logo_marcador_de_posicion(tmp_path):
+    st, app = _client(tmp_path)
+    with app as c:
+        r = c.get("/logo")
+        assert r.status_code == 200 and "svg" in r.headers["content-type"]
+        assert "ground/static/logo.png" in r.text
+
+
+def test_lineas_invalidas_no_tumban_el_servidor(tmp_path):
+    st, app = _client(tmp_path)
+    with app as c:
+        feed(c, st, [_line(0), "basura", "", "# info", "ERR,-7,-90,-3", _line(1), "1,2,3"])
+        s = c.get("/api/status").json()["s"]
+        assert (s["received"], s["invalid"], s["radio_errors"]) == (2, 2, 1)
+
+
+def test_grabacion_y_exportacion(tmp_path):
+    st, app = _client(tmp_path)
+    with app as c:
+        assert c.get("/api/export.csv").status_code == 404            # nada grabado aún
+        feed(c, st, [_line(0)])                                        # antes de grabar: no se guarda
+        info = c.post("/api/record/start").json()
+        assert info["active"] and info["csv"].endswith(".csv")
+        feed(c, st, [_line(1, 10.5), "basura", _line(2, 20.5)])
+        assert c.get("/api/status").json()["rec"]["packets"] == 2
+        info = c.post("/api/record/stop").json()
+        assert not info["active"] and info["packets"] == 2
+        r = c.get("/api/export.csv")
+        assert r.status_code == 200 and "attachment" in r.headers["content-disposition"]
+        rows = list(csv.DictReader(r.text.splitlines()))
+        assert [float(x["altura_m"]) for x in rows] == [10.5, 20.5]
+        raw = (tmp_path / "data" / info["raw"]).read_text().splitlines()
+        assert len(raw) == 3 and raw[1] == "basura"
+
+
+def test_websocket_hello_paquetes_y_eventos(tmp_path):
+    st, app = _client(tmp_path)
+    with app as c:
+        feed(c, st, [_line(0, estado=1), _line(1, estado=2, flags=0x01)])
+        with c.websocket_connect("/ws") as ws:
+            hello = json.loads(ws.receive_text())
+            assert hello["type"] == "hello" and len(hello["history"]) == 2
+            assert hello["states"][3] == "CAIDA" and len(hello["flags"]) == 8
+            assert any(e["text"] == "Estado: ASCENSO" for e in hello["events"])
+            feed(c, st, [_line(2, h=33.3, estado=3, flags=0x03)])
+            tipos = []
+            while True:
+                m = json.loads(ws.receive_text())
+                tipos.append(m["type"])
+                if m["type"] == "packet":
+                    assert m["p"]["h"] == 33.3 and m["s"]["received"] == 3
+                if "event" in tipos and "packet" in tipos and any(
+                        t == "event" for t in tipos[tipos.index("packet"):]):
+                    break
+            assert "packet" in tipos
+
+
+def test_reset(tmp_path):
+    st, app = _client(tmp_path)
+    with app as c:
+        feed(c, st, [_line(0), _line(1)])
+        assert c.post("/api/reset").json()["ok"]
+        s = c.get("/api/status").json()["s"]
+        assert s["received"] == 0 and s["link"] == "esperando"
+
+
+def test_replay_a_traves_del_servidor(tmp_path):
+    """Graba una sesión simulada y la repite con --replay a gran velocidad."""
+    rec = C.Recorder(str(tmp_path))
+    rec.start()
+    n = 0
+    for t, line in SRC.sim_lines(seed=1):
+        kind, rx = C.parse_line(line)
+        rec.write_packet(rx, 1_700_000_000 + t)
+        n += 1
+        if n >= 120:
+            break
+    rec.stop()
+    st = SV.Station(SRC.ReplaySource(rec.csv_path, speed=200.0), str(tmp_path / "d"))
+    with TestClient(SV.create_app(st)) as c:
+        for _ in range(100):
+            if c.get("/api/status").json()["s"]["received"] >= 120:
+                break
+            import time
+            time.sleep(0.1)
+        s = c.get("/api/status").json()["s"]
+        assert s["received"] == 120 and s["lost"] == 0 and s["invalid"] == 0
