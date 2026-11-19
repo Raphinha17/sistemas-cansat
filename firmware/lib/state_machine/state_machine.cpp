@@ -228,6 +228,14 @@ void StateMachine::stepTierra(const SmInput &in) {
     has_p0_ref_ = true;
   }
 
+  // NO-GO: sin ningún sensor (IMU y barómetro muertos) no hay misión posible. Se queda en
+  // TIERRA transmitiendo, sin pasar a ASCENSO ni guardar una misión en NVS (PREGUNTAS P44).
+  // Con un solo sensor vivo todo sigue igual.
+  if (!in.baro_ok && !in.imu_ok) {
+    climb_ = false;
+    return;
+  }
+
   // Modo C (tinaco): la caída libre se detecta ya en TIERRA (el CanSat no sube los 20 m
   // del despegue). Pasa directo a CAIDA, que dispara en el ciclo siguiente.
   if (prm_.immediate && detectRelease(in)) {

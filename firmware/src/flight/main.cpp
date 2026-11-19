@@ -32,7 +32,9 @@
 //   MISION        muestra el registro de misión guardado en NVS
 //   MISION_BORRAR borra el registro de misión y reinicia la placa
 //   MODO          muestra el modo de despliegue; MODO A|B|C lo cambia (estados 0 y 1)
+//   SIM_INICIO    entra al modo simulación (o lo reinicia de cero) sin esperar sensores
 //   SIM_FIN       sale del modo simulación (vuelve a los sensores y recalibra)
+//   MISION_PRUEBA guarda en NVS una misión en curso FALSA (para probar el reinicio en vuelo)
 //   ARMAR         (solo DEMO_SEPARACION) arma (o re-arma) la cuenta regresiva del servo
 //   DESARMAR      (solo DEMO_SEPARACION) cancela la cuenta regresiva
 #include <Arduino.h>
@@ -69,6 +71,9 @@ static volatile bool req_flush = false;
 // Publicado por control para comms (diagnóstico y avisos por serial)
 static volatile uint8_t pub_state = ST_AUTOPRUEBA, pub_flags = 0;
 static volatile uint32_t pub_fire_ms = 0, pub_fire_count = 0;
+static volatile float pub_fire_h = 0, pub_fire_vz = 0;  // estimados en el ciclo del disparo
+static volatile uint16_t pub_lowg = 0;                  // liberaciones falsas descartadas
+static volatile uint32_t pub_t_ms = 0;                  // reloj del último ciclo de control
 static volatile float pub_h = 0, pub_vz = 0, pub_hmax = 0, pub_tilt = 0, pub_demo_rest = 0;
 static volatile uint8_t pub_servo_int = 0;
 static volatile bool pub_servo_conf = false, pub_servo_on = false, pub_vz_fuera = false;
@@ -106,7 +111,10 @@ static void controlTask(void *) {
     if (req_sim_on) {
       req_sim_on = false;
       sim_mode = true;
-      sim_fresh = true;
+      sim_fresh = true;                 // la primera línea reinicia el núcleo de cero
+      xQueueReset(sim_queue);
+      pub_state = ST_AUTOPRUEBA;        // como un arranque nuevo (permite MODO, SIM_INICIO...)
+      pub_flags = 0;
     }
     // Modo de despliegue: solo en AUTOPRUEBA o TIERRA (nunca con la misión en curso).
     if (req_mode >= 0) {
@@ -203,6 +211,8 @@ static void controlTask(void *) {
     }
     if (core.evFire()) {
       pub_fire_ms = in.t_ms;
+      pub_fire_h = core.kf().h();
+      pub_fire_vz = core.kf().vz();
       pub_fire_count = pub_fire_count + 1;
     }
 
@@ -238,6 +248,7 @@ static void controlTask(void *) {
     // --- Publicación para diagnóstico ---
     const SmOutput &so = core.sm().out();
     pub_state = core.state();
+    pub_t_ms = in.t_ms;
     pub_flags = core.flags();
     pub_h = core.kf().h();
     pub_vz = core.kf().vz();
@@ -247,6 +258,7 @@ static void controlTask(void *) {
     pub_servo_int = so.servo_intentos;
     pub_servo_conf = so.servo_confirmado;
     pub_vz_fuera = so.vz_fuera_rango;
+    pub_lowg = so.lowg_descartadas;
     pub_demo_rest = core.demo().remainingS(in.t_ms);
     pub_demo = core.demo().counting() ? 1 : core.demo().fired() ? 2 : 0;
 
@@ -314,6 +326,10 @@ static void handleCommand(const String &cmd) {
                   "vz_fuera_rango=%u\n",
                   pub_servo_on ? "ON" : "OFF", pub_servo_int, pub_servo_conf,
                   (unsigned long)pub_fire_count, (unsigned long)pub_fire_ms, pub_vz_fuera);
+    Serial.printf("liberaciones_descartadas=%u disparo_h=%.1f disparo_vz=%.1f "
+                  "h_despliegue=%.1f\n",
+                  pub_lowg, pub_fire_h, pub_fire_vz,
+                  pub_fire_h - fabsf(pub_fire_vz) * SM_T_LATENCIA_S);
     Serial.printf("ciclos=%lu sobretiempos=%lu max_us=%lu imu_err=%lu baro_err=%lu\n",
                   (unsigned long)st_cycles, (unsigned long)st_overruns,
                   (unsigned long)st_max_us, (unsigned long)st_imu_err,
@@ -358,6 +374,31 @@ static void handleCommand(const String &cmd) {
     } else {
       req_mode = (int8_t)m;  // lo aplica control; comms lo guarda en NVS y en el log
     }
+  } else if (cmd == "SIM_INICIO") {
+    // Entra al modo simulación sin depender de los sensores (banco sin MPU6500/BMP280), o
+    // lo reinicia de cero tras un vuelo simulado. Nunca con una misión real en curso.
+    if (!sim_mode && pub_state > ST_TIERRA) {
+      Serial.println("ERR hay una mision en curso; MISION_BORRAR y reiniciar la placa");
+    } else {
+      req_sim_on = true;
+      pub_state = ST_AUTOPRUEBA;
+      Serial.println("OK SIM_INICIO: modo simulacion (sensores ignorados, sin NVS); "
+                     "manda lineas SIM,...");
+    }
+  } else if (cmd == "MISION_PRUEBA") {
+    // Solo para probar el reinicio en vuelo sin volar: guarda una misión FALSA en curso.
+    if (sim_mode || pub_state > ST_TIERRA) {
+      Serial.println("ERR solo en los estados 0 y 1 y fuera del modo simulacion");
+    } else {
+      MissionRecord r;
+      r.mission = 1;
+      r.state = ST_ASCENSO;
+      r.flags = FLAG_BASE_LISTA;
+      Serial.println(mission_store::save(r)
+                         ? "OK mision de PRUEBA guardada (ASCENSO). Reinicia con el boton RST: "
+                           "debe decir # REINICIO EN VUELO. Para quitarla: MISION_BORRAR"
+                         : "ERR no se pudo guardar en NVS");
+    }
   } else if (cmd == "SIM_FIN") {
     req_sim_off = true;
     Serial.println("OK fin del modo simulacion (recalibrando con sensores)");
@@ -372,8 +413,9 @@ static void handleCommand(const String &cmd) {
       Serial.println("OK desarmado");
     }
   } else if (cmd.length()) {
-    Serial.println("Comandos: TX1 TX5 STAT DUMP BORRAR MISION MISION_BORRAR MODO [A|B|C]"
-                   " SIM_FIN ARMAR DESARMAR | lineas SIM,... (docs/sim_input.md)");
+    Serial.println("Comandos: TX1 TX5 STAT DUMP BORRAR MISION MISION_BORRAR MISION_PRUEBA "
+                   "MODO [A|B|C] SIM_INICIO SIM_FIN ARMAR DESARMAR | lineas SIM,... "
+                   "(docs/sim_input.md)");
   }
 }
 
@@ -408,7 +450,8 @@ static void commsTask(void *) {
     // Avisos por serial
     if (pub_state != last_state) {
       last_state = pub_state;
-      Serial.printf("# ESTADO %u banderas=0x%02X\n", last_state, pub_flags);
+      Serial.printf("# ESTADO %u banderas=0x%02X t_ms=%lu\n", last_state, pub_flags,
+                    (unsigned long)pub_t_ms);
     }
     if (pub_mode != saved_mode) {
       // Modo nuevo aplicado por control: se guarda en NVS y queda en el log.
@@ -422,16 +465,19 @@ static void commsTask(void *) {
     }
     if (pub_demo != last_demo) {
       if (pub_demo == 1)
-        Serial.printf("# DEMO ARMADO: disparo en %d s (toque largo de PRG o DESARMAR cancela)\n",
-                      DEMO_DELAY_S);
+        Serial.printf("# DEMO ARMADO t_ms=%lu: disparo en %d s (toque largo de PRG o DESARMAR "
+                      "cancela)\n",
+                      (unsigned long)pub_t_ms, DEMO_DELAY_S);
       else if (last_demo == 1 && pub_demo == 0)
         Serial.println("# DEMO CANCELADO");
       last_demo = pub_demo;
     }
     if (pub_fire_count != last_fire_count) {
       last_fire_count = pub_fire_count;
-      Serial.printf("# %s t_ms=%lu\n", core.demoEnabled() ? "SEPARACION" : "DISPARO",
-                    (unsigned long)pub_fire_ms);
+      Serial.printf("# %s t_ms=%lu h=%.1f vz=%.1f h_despliegue=%.1f\n",
+                    core.demoEnabled() ? "SEPARACION" : "DISPARO", (unsigned long)pub_fire_ms,
+                    pub_fire_h, pub_fire_vz,
+                    pub_fire_h - fabsf(pub_fire_vz) * SM_T_LATENCIA_S);
     }
 
     while (Serial.available()) {

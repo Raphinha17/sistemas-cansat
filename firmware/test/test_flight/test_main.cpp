@@ -446,6 +446,58 @@ static void test_modo_c_sin_altura() {
 }
 
 // ---------------------------------------------------------------------------
+// Placa sin sensores (banco con dos Heltec y nada conectado)
+// ---------------------------------------------------------------------------
+static void test_sin_sensores() {
+  // Arranque con la autoprueba fallida (sensors.imuOk() = baroOk() = false) y lecturas
+  // inválidas: llega a TIERRA, NO-GO + fallos de ambos sensores (0xE0), no pasa a ASCENSO,
+  // no guarda misión y el servo no recibe energía.
+  FlightCore core;
+  core.begin(0, false, false);
+  uint8_t flags = 0;
+  for (int i = 0; i < 3000; i++) {            // 30 s
+    CoreInput in;
+    in.t_ms = (uint32_t)(i * 10);
+    in.imu_valid = false;
+    in.baro_sampled = (i % BARO_DECIM) == 0;
+    in.baro_valid = false;
+    core.step(in);
+    flags = core.flags();
+    TEST_ASSERT_FALSE(core.servo().power);
+  }
+  TEST_ASSERT_EQUAL(ST_TIERRA, core.state());
+  TEST_ASSERT_EQUAL_HEX8(FLAG_FALLO_BARO | FLAG_FALLO_IMU | FLAG_NO_GO, flags);
+  TEST_ASSERT_EQUAL_UINT32(0, core.recordSeq());
+  TEST_ASSERT_EQUAL(0, core.record().mission);
+}
+
+static void test_reinicio_con_mision_de_prueba_sin_sensores() {
+  // MISION_PRUEBA guarda una misión falsa en ASCENSO; al reiniciar sin sensores la placa
+  // la recupera (ASCENSO, no TIERRA), sin romperse, y avisa; MISION_BORRAR la quita.
+  MissionRecord rec;
+  rec.mission = 1;
+  rec.state = ST_ASCENSO;
+  rec.flags = FLAG_BASE_LISTA;
+  FlightCore core;
+  core.beginRecovered(1000, false, false, rec);
+  for (int i = 0; i < 500; i++) {              // 5 s
+    CoreInput in;
+    in.t_ms = 1000 + (uint32_t)(i * 10);
+    core.step(in);
+  }
+  TEST_ASSERT_EQUAL(ST_ASCENSO, core.state());
+  TEST_ASSERT_FALSE(core.servo().power);
+  // Sin el registro (tras MISION_BORRAR) arranca normal: TIERRA
+  FlightCore limpio;
+  limpio.begin(0, false, false);
+  CoreInput in;
+  limpio.step(in);
+  in.t_ms = 10;
+  limpio.step(in);
+  TEST_ASSERT_EQUAL(ST_TIERRA, limpio.state());
+}
+
+// ---------------------------------------------------------------------------
 // Formato del modo simulación por serial (docs/sim_input.md)
 // ---------------------------------------------------------------------------
 static void test_sim_line() {
@@ -493,6 +545,8 @@ int main(int, char **) {
   RUN_TEST(test_modo_a_ignora_liberacion_de_b);
   RUN_TEST(test_modo_c_tinaco);
   RUN_TEST(test_modo_c_sin_altura);
+  RUN_TEST(test_sin_sensores);
+  RUN_TEST(test_reinicio_con_mision_de_prueba_sin_sensores);
   RUN_TEST(test_sim_line);
   return UNITY_END();
 }

@@ -37,3 +37,24 @@ def test_dry_run_vuelo(tmp_path):
     assert max(len(x) for x in lines) < 100
     # IMU muerto desde los 40 s: campos vacíos
     assert lines[-1].split(",")[2:8] == [""] * 6
+
+
+class _FakeSerial:
+    """Puerto falso: guarda lo escrito y no devuelve nada."""
+
+    def __init__(self):
+        self.out = []
+
+    def write(self, b):
+        self.out.append(b.decode().strip())
+
+    def readline(self):
+        return b""
+
+
+def test_prepare_manda_sim_inicio_primero():
+    ser = _FakeSerial()
+    assert SS.prepare(ser, "b", wait_s=0.0) == ["SIM_INICIO", "MODO B"]
+    assert ser.out == ["SIM_INICIO", "MODO B"]
+    ser = _FakeSerial()
+    assert SS.prepare(ser, None, wait_s=0.0) == ["SIM_INICIO"]

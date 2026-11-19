@@ -87,8 +87,15 @@ Parámetros en `config.h` (`DEPLOY_*`); dudas en `docs/PREGUNTAS.md` P31-P33.
 ## Comandos serial (115200)
 `TX1` (según el estado, por defecto), `TX5` (5 Hz en tierra, pruebas), `STAT`, `DUMP`
 (log en hex), `BORRAR`, `MISION` (registro de NVS), `MISION_BORRAR` (borra la misión y
-reinicia), `MODO [A|B|C]`, `SIM_FIN`, y en `heltec_demo`/`heltec_banco`: `ARMAR`,
-`DESARMAR`. Las líneas `SIM,...` activan el modo simulación (solo en estados 0 y 1).
+reinicia), `MISION_PRUEBA` (guarda una misión FALSA en curso, para probar el reinicio en
+vuelo sin volar), `MODO [A|B|C]`, `SIM_INICIO` (entra al modo simulación, o lo reinicia de
+cero, sin depender de los sensores), `SIM_FIN`, y en `heltec_demo`/`heltec_banco`: `ARMAR`,
+`DESARMAR`. Las líneas `SIM,...` también activan el modo simulación (solo en estados 0 y 1).
+
+**Placa sin sensores** (banco con solo las Heltec): IMU y barómetro fallan en la
+autoprueba, la placa llega a TIERRA con NO-GO y fallos de ambos sensores (banderas 0xE0) y
+se queda ahí transmitiendo a 1 Hz; no pasa a ASCENSO ni guarda misión. El modo simulación
+funciona igual (guía: `docs/PRUEBAS_SISTEMAS.md`).
 
 **`MISION_BORRAR` antes de cada vuelo o prueba**: un corte de corriente (o apagar con el
 interruptor) a mitad de una misión deja el registro en NVS y el siguiente arranque lo
@@ -99,6 +106,9 @@ regresiva (LED de la placa parpadeando rápido); otro toque largo antes de termi
 cancela; tras el disparo el LED queda fijo. No presionar PRG al encender (GPIO0 es pin
 de arranque). El firmware de vuelo normal no usa el botón ni el LED.
 
-Mensajes de la placa: `# ESTADO n banderas=0x..` en cada cambio de estado, `# DISPARO`
-(o `# SEPARACION` en demo) con su `t_ms`, `# DEMO ARMADO` / `# DEMO CANCELADO`,
+Mensajes de la placa: `# ESTADO n banderas=0x.. t_ms=..` en cada cambio de estado (el
+`t_ms` es el del ciclo en que lo imprime la tarea de comunicaciones, ±15 ms),
+`# DISPARO t_ms=.. h=.. vz=.. h_despliegue=..` (o `# SEPARACION` en demo; h y vz estimados
+en el ciclo del disparo y h_despliegue = h - |vz|*0.5, la altura donde actúa el autogiro),
+`# DEMO ARMADO t_ms=..` / `# DEMO CANCELADO`,
 `OK modo X` al cambiar de modo y `# REINICIO EN VUELO` al recuperar una misión.

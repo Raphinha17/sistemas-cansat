@@ -45,9 +45,15 @@ SIM,40010,0.02,0.01,1.0,0.4,-1.2,0.1,nan,22.1   <- barómetro fallido
 
 ## Comportamiento
 
-- **Entrada al modo:** la primera línea `SIM,...` válida, solo si la placa está en
-  AUTOPRUEBA (0) o TIERRA (1). En cualquier otro estado se ignora (nunca se activa con la
-  misión en curso). La placa responde `# SIM: modo simulacion activado ...`.
+- **Entrada al modo:** el comando `SIM_INICIO` o la primera línea `SIM,...` válida, solo
+  si la placa está en AUTOPRUEBA (0) o TIERRA (1). En cualquier otro estado se ignora (nunca
+  se activa con la misión en curso). La placa responde `# SIM: modo simulacion activado ...`
+  o `OK SIM_INICIO ...`.
+- **`SIM_INICIO`** deja la placa en el estado 0 y reinicia el núcleo con la primera línea: sirve
+  para repetir vuelos simulados seguidos (sin él, tras ATERRIZADO las líneas siguen en el
+  estado 6) y no depende de los sensores. Una placa **sin sensores** (banco con solo las
+  Heltec) queda en TIERRA con NO-GO y acepta el modo simulación sin ajustes. En modo
+  simulación la placa no transmite hasta recibir la primera línea.
 - Al entrar, el núcleo arranca de cero con los datos sintéticos: autoprueba, sesgo del
   giroscopio (las primeras 200 líneas deben ser en reposo) y p0 nuevos.
 - **Un ciclo por línea:** el lazo avanza solo cuando llega una línea, así que el ritmo lo
@@ -66,17 +72,18 @@ SIM,40010,0.02,0.01,1.0,0.4,-1.2,0.1,nan,22.1   <- barómetro fallido
   vuelo con el mismo modo (`flight_sim.py --mode B`).
 - **Salida del modo:** comando `SIM_FIN` (vuelve a los sensores reales y recalibra) o
   reinicio de la placa.
-- Mensajes de la placa durante la simulación: `# ESTADO n banderas=0x..` en cada cambio
-  de estado y `# DISPARO t_ms=...` al disparar.
+- Mensajes de la placa durante la simulación: `# ESTADO n banderas=0x.. t_ms=..` en cada
+  cambio de estado y `# DISPARO t_ms=.. h=.. vz=.. h_despliegue=..` al disparar. Un estado que
+  dura un solo ciclo (CAÍDA en el modo C) puede no llegar a imprimirse.
 
 ## Prueba en banco con `tools/sim_serial.py`
 
 ```
 py tools/flight_sim.py --raw-csv vuelo.csv --seed 1
-py tools/sim_serial.py --csv vuelo.csv --port COM5 --fin
+py tools/sim_serial.py --csv vuelo.csv --port COM5 --modo A --fin
 ```
 
-`sim_serial.py` convierte cada fila del CSV crudo (100 Hz) en una línea `SIM,...`, la
+`sim_serial.py` manda `SIM_INICIO` (y `MODO` con `--modo`) y luego convierte cada fila del CSV crudo (100 Hz) en una línea `SIM,...`, la
 envía a tiempo real y muestra lo que imprime la placa. Las filas con el IMU en ceros
 (`flight_sim.py --fail imu`) se mandan con los campos del IMU vacíos. Con `--dry-run`
 solo escribe las líneas, sin placa. Escenarios útiles: ver el encabezado de

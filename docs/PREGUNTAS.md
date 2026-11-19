@@ -120,7 +120,9 @@ particiones por defecto (~1.4 MB de datos) caben ~15 min a 50 Hz; la espera en t
 
 **P15. Fin de AUTOPRUEBA.** El estado 0 dura mientras se calibra el giroscopio y no hay
 primera lectura de presión; luego pasa a TIERRA (1). Con los dos sensores muertos se
-activa NO-GO (bit7) y pasa a TIERRA igual (sigue transmitiendo, pero nunca despega).
+activa NO-GO (bit7) y pasa a TIERRA igual (sigue transmitiendo, pero nunca despega). Esto
+último se cumple desde P44 (antes, sin barómetro la placa saltaba a ASCENSO aunque no
+hubiera ningún sensor).
 
 ## Máquina de estados, servo y modos (etapa 2)
 
@@ -366,6 +368,60 @@ receptora: se probó con un puerto inexistente (el servidor avisa y reintenta), 
 `--sim`, con `--replay` y con pruebas automáticas. Falta probar con la Heltec real: la
 reconexión al desenchufar y enchufar el USB y que el parser tolere el arranque de la
 placa (mensajes `#` y posible basura en la primera línea).
+
+## Pruebas de sistema sin sensores (etapa 5)
+
+**P44. Placa sin sensores (banco con solo dos Heltec).** Revisando el firmware: sin IMU ni
+barómetro la placa llegaba a TIERRA en un ciclo y, por la regla de P20 (baro muerto →
+ASCENSO de inmediato), pasaba a ASCENSO con NO-GO, **guardaba una misión en NVS** (el
+siguiente arranque decía `REINICIO EN VUELO`) y bloqueaba el modo simulación (solo entra
+en los estados 0 y 1). No se reiniciaba ni se quedaba colgada.
+- Ajuste (único cambio al comportamiento de la máquina de estados): con IMU **y** barómetro
+  muertos, TIERRA no pasa a ASCENSO (se queda con NO-GO, como decía P15). Con un solo
+  sensor vivo todo sigue igual (P20); la prueba `test_sin_sensores_se_queda_en_tierra` lo
+  verifica. El vuelo normal (sensores sanos) no cambia.
+- Comando nuevo `SIM_INICIO`: entra al modo simulación (o lo reinicia de cero) en los
+  estados 0 y 1 o ya en simulación; con una misión real en curso responde `ERR`. Sirve
+  para vuelos simulados seguidos (sin él, tras ATERRIZADO las líneas siguen en el estado 6)
+  y no depende de los sensores. `sim_serial.py` lo manda solo (y `MODO` con `--modo`).
+- SUPOSICIÓN: no se pudo probar en una placa (solo native). Falta confirmar que
+  `Adafruit_BMP280::begin` y las lecturas I2C sin dispositivo no tardan ni cuelgan el arranque
+  (por el código de las librerías no debería: el sondeo falla de inmediato).
+
+**P45. Comandos y mensajes agregados para las pruebas.**
+- `MISION_PRUEBA` guarda una misión *falsa* en ASCENSO para probar el reinicio en vuelo y
+  `MISION_BORRAR` sin despegar. Solo en estados 0 y 1 y fuera de la simulación. Si se
+  usa y se olvida, el siguiente arranque cree que es un reinicio en vuelo: borrar con
+  `MISION_BORRAR`.
+- `# DISPARO` (y `# SEPARACION`) ahora imprime `h`, `vz` (estimados en el ciclo del
+  disparo) y `h_despliegue = h - |vz|·0.5`; `# ESTADO` y `# DEMO ARMADO` imprimen `t_ms`;
+  `STAT` agrega `liberaciones_descartadas`, `disparo_h`, `disparo_vz` y `h_despliegue`.
+  Solo es información por serial: no cambia el control.
+- `h_despliegue` es del estimador a bordo y dispara en el umbral (por construcción da
+  ≈ 200 m); la altura real de despliegue (198.3 y 199.4 m con las semillas 1 y 7) la mide
+  `pio test -e native` con la verdad del simulador.
+
+**P46. Abrir el puerto puede reiniciar la placa.** Con el CP210x de la Heltec V3, abrir el
+puerto serie puede reiniciar la placa (DTR/RTS).
+- SUPOSICIÓN: `sim_serial.py` abre el puerto con DTR y RTS en bajo y espera `--espera 2`
+  segundos antes de mandar `SIM_INICIO`. Si aun así se reinicia (se perdería `SIM_INICIO`),
+  subir `--espera`. Un reinicio durante el vuelo simulado lo estropea (la simulación no se
+  guarda en NVS).
+
+**P47. Criterio de la prueba de alcance a 250 m.** El reglamento pide transmitir a 250 m;
+no define cuántos paquetes ni qué calidad.
+- SUPOSICIÓN: pasa con pérdida ≤ 5 %, RSSI promedio ≥ -100 dBm y SNR promedio ≥ 0 dB en
+  2 minutos a 1 Hz (≈ 120 paquetes). Con SF7/250 kHz la sensibilidad es ≈ -118 dBm y el
+  límite de SNR ≈ -7.5 dB (valores aproximados), o sea ≈ 18 dB de margen. La prueba se hace
+  en tierra, con la placa transmitiendo a 1 Hz en TIERRA (sin PC), sin la placa en el
+  aire: es más exigente que el vuelo en visibilidad directa, pero no incluye el efecto
+  de la antena montada en el CanSat ni del movimiento. ¿El jurado exige otro número?
+
+**P48. Alcance de las pruebas sin sensores.** Con la simulación no se prueba el I2C real,
+el servo (giro y confirmación por pico de 2 g), la batería, el ruido real de los sensores
+ni el vuelo real. Para el servo sin conectar, la secuencia sin confirmación dura 3.6 s
+(1 s + 2 × (0.3 s + 1 s)): es lo esperado en las pruebas (h) y (g). La guía es
+`docs/PRUEBAS_SISTEMAS.md`.
 
 ## Resueltas
 

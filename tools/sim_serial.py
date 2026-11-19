@@ -9,7 +9,11 @@ Lo que imprime la placa se muestra en pantalla.
 Ejemplos:
   py tools/flight_sim.py --raw-csv vuelo.csv --seed 1
   py tools/sim_serial.py --csv vuelo.csv --port COM5
+  py tools/sim_serial.py --csv vuelo.csv --port COM5 --modo B   # MODO B antes del vuelo
   py tools/sim_serial.py --csv vuelo.csv --dry-run --out lineas.txt   # sin placa
+
+Antes de las líneas manda SIM_INICIO (la placa entra al modo simulación y reinicia de cero,
+aunque no tenga sensores o venga de otro vuelo simulado); --no-inicio lo omite.
 """
 from __future__ import annotations
 
@@ -73,6 +77,22 @@ def send(lines: Iterable[str], ser, speed: float = 1.0, period_s: float = 0.01,
     return n
 
 
+def prepare(ser, modo: Optional[str] = None, wait_s: float = 0.4, echo=None) -> list:
+    """Manda SIM_INICIO (y MODO A|B|C si se pide) y devuelve los comandos enviados.
+
+    SIM_INICIO va primero: deja la placa en el estado 0 y así acepta MODO aunque venga de
+    un vuelo simulado que terminó en ATERRIZADO."""
+    cmds = ["SIM_INICIO"] + ([f"MODO {modo.upper()}"] if modo else [])
+    for c in cmds:
+        ser.write((c + "\n").encode())
+        t_end = time.time() + wait_s
+        while time.time() < t_end:
+            msg = ser.readline().decode(errors="replace").rstrip()
+            if msg and echo:
+                echo(msg)
+    return cmds
+
+
 def main(argv: Optional[list] = None) -> int:
     ap = argparse.ArgumentParser(description="Vuelo simulado -> placa (líneas SIM por serial)")
     ap.add_argument("--csv", required=True, help="CSV crudo de flight_sim.py --raw-csv")
@@ -83,6 +103,12 @@ def main(argv: Optional[list] = None) -> int:
     ap.add_argument("--dry-run", action="store_true", help="no abre el puerto; escribe las líneas")
     ap.add_argument("--out", help="con --dry-run: archivo de salida (por defecto, stdout)")
     ap.add_argument("--fin", action="store_true", help="al terminar, manda SIM_FIN")
+    ap.add_argument("--modo", choices=["A", "B", "C"],
+                    help="manda MODO A|B|C antes del vuelo (el CSV debe ser del mismo modo)")
+    ap.add_argument("--espera", type=float, default=2.0,
+                    help="s de espera tras abrir el puerto (por si la placa se reinicia; def. 2)")
+    ap.add_argument("--no-inicio", action="store_true",
+                    help="no manda SIM_INICIO (la primera línea SIM activa el modo)")
     a = ap.parse_args(argv)
     if a.speed <= 0:
         ap.error("--speed debe ser > 0")
@@ -102,16 +128,33 @@ def main(argv: Optional[list] = None) -> int:
         ap.error("falta --port (o --dry-run)")
     import serial  # pyserial, solo si se usa el puerto
 
-    with serial.Serial(a.port, a.baud, timeout=0.05) as ser:
-        time.sleep(0.5)
-        n = send(lines_from_csv(a.csv), ser, a.speed, echo=lambda m: print("<", m))
-        if a.fin:
-            ser.write(b"SIM_FIN\n")
-        t_end = time.time() + 1.0
+    # DTR/RTS en bajo antes de abrir: así abrir el puerto no reinicia la placa (CP210x).
+    ser = serial.Serial()
+    ser.port, ser.baudrate, ser.timeout = a.port, a.baud, 0.05
+    ser.dtr = False
+    ser.rts = False
+    ser.open()
+    t0 = time.time()
+
+    def echo(m):                       # lo que dice la placa, con segundos desde el inicio
+        print(f"[{time.time() - t0:7.2f} s] < {m}", flush=True)
+
+    with ser:
+        time.sleep(a.espera)
+        if not a.no_inicio:
+            prepare(ser, a.modo, echo=echo)
+        elif a.modo:
+            ap.error("--modo necesita SIM_INICIO (quita --no-inicio)")
+        n = send(lines_from_csv(a.csv), ser, a.speed, echo=echo)
+        ser.write(b"STAT\n")           # resumen final: disparo, intentos del servo, etc.
+        t_end = time.time() + 1.5
         while time.time() < t_end:
             msg = ser.readline().decode(errors="replace").rstrip()
             if msg:
-                print("<", msg)
+                echo(msg)
+        if a.fin:
+            ser.write(b"SIM_FIN\n")
+            time.sleep(0.3)
     print(f"lineas enviadas={n}", file=sys.stderr)
     return 0
 

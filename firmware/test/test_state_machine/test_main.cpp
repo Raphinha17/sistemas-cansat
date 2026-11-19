@@ -214,6 +214,34 @@ static void test_no_go() {
   TEST_ASSERT_TRUE(sm.out().flags & FLAG_NO_GO);
 }
 
+static void test_sin_sensores_se_queda_en_tierra() {
+  // IMU y barómetro muertos desde el arranque (banco sin sensores): NO-GO, llega a TIERRA y
+  // se queda ahí; no pasa a ASCENSO ni guarda una misión (recordSeq no cambia).
+  StateMachine sm;
+  sm.begin(0);
+  for (uint32_t t = 0; t < 20000; t += 10) {
+    SmInput in = base(t);
+    in.imu_ok = in.baro_ok = false;
+    sm.step(in);
+  }
+  TEST_ASSERT_EQUAL(ST_TIERRA, sm.state());
+  TEST_ASSERT_TRUE(sm.out().flags & FLAG_NO_GO);
+  TEST_ASSERT_EQUAL(0, sm.record().mission);
+  TEST_ASSERT_EQUAL_UINT32(0, sm.recordSeq());
+  TEST_ASSERT_FALSE(sm.out().servo.power);
+  // Con un solo sensor vivo el comportamiento no cambia (PREGUNTAS P20): sin barómetro
+  // pero con IMU pasa a ASCENSO de inmediato.
+  StateMachine b;
+  b.begin(0);
+  for (uint32_t t = 0; t < 2000; t += 10) {
+    SmInput in = base(t);
+    in.baro_ok = false;
+    b.step(in);
+  }
+  TEST_ASSERT_EQUAL(ST_ASCENSO, b.state());
+  TEST_ASSERT_FALSE(b.out().flags & FLAG_NO_GO);
+}
+
 static void test_reinicio_decide_por_vz() {
   MissionRecord rec;
   rec.mission = 1;
@@ -641,6 +669,7 @@ int main(int, char **) {
   RUN_TEST(test_respaldo_160m_sintetico);
   RUN_TEST(test_sin_imu_no_hay_compuerta);
   RUN_TEST(test_no_go);
+  RUN_TEST(test_sin_sensores_se_queda_en_tierra);
   RUN_TEST(test_reinicio_decide_por_vz);
   RUN_TEST(test_aterrizado_tasas_y_mision);
   RUN_TEST(test_descenso_fuera_de_rango);
