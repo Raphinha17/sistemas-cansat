@@ -11,6 +11,7 @@ liberación, NVS (reinicio en vuelo), modo simulación por serial y modo `DEMO_S
 |---|---|---|
 | `heltec_wifi_lora_32_V3` | vuelo | `pio run -e heltec_wifi_lora_32_V3` |
 | `heltec_demo` | vuelo + `DEMO_SEPARACION` (video de aceptación) | `pio run -e heltec_demo` |
+| `heltec_banco` | banco: demo sin reed ni ADC de pila (**NUNCA PARA VUELO**) | `pio run -e heltec_banco -t upload` |
 | `rx_station` | receptor de la estación terrena | `pio run -e rx_station -t upload` |
 | `native` | pruebas en PC | `pio test -e native` |
 
@@ -18,8 +19,16 @@ En Windows, `pio` está en el `.venv` del proyecto: `..\.venv\Scripts\pio.exe`.
 El entorno `native` usa `g++` si existe; si no, el compilador de `zig` (`pip install ziglang`
 en el `.venv`). Las pruebas generan sus datos con `tools/flight_sim.py --raw-csv`.
 
-Los entornos de vuelo y demo **no compilan** mientras haya pines (o el nivel de encendido
-del servo) `TODO_CONFIRMAR` en `include/config.h` (#error intencional). Para comprobar que el resto compila:
+Los entornos de vuelo y demo **no compilan** mientras haya pines `TODO_CONFIRMAR` en
+`include/config.h` (#error intencional). Ya confirmados: I2C SDA 41 / SCL 42 y señal del
+servo 7. El servo no tiene pin de energía (`SERVO_POWER_ENABLED 0`): solo se genera PWM
+desde el estado 3 (riesgo documentado en `docs/PREGUNTAS.md` P30). Faltan el reed, el
+enclavamiento y el ADC de la pila.
+
+> **AVISO: `heltec_banco` NUNCA debe usarse para vuelo.** Sirve para probar sensores y
+> servo en la mesa mientras faltan esos pines: desactiva el reed y el ADC de la pila
+> (el paquete reporta batería 0), se arma solo con el comando serial `ARMAR` (modo demo)
+> y no tiene la verificación de pines pendientes. Para comprobar que el resto compila:
 `set PLATFORMIO_BUILD_FLAGS=-DPERMITIR_PINES_PENDIENTES` (cmd) antes de `pio run`.
 Nunca subir a la placa un binario compilado así.
 

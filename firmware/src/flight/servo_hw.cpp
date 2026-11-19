@@ -3,7 +3,10 @@
 #include "config.h"
 
 // Con pines pendientes (solo posible con PERMITIR_PINES_PENDIENTES) no se toca ningún pin.
-#if (PIN_SERVO_SIGNAL >= 0) && (PIN_SERVO_POWER >= 0) && (SERVO_POWER_ON_LEVEL >= 0)
+// Con SERVO_POWER_ENABLED = 0 el servo tiene energía siempre: "encender" solo significa
+// generar PWM, y "apagar" quitar el PWM y dejar la señal en entrada con pull-down.
+#if (PIN_SERVO_SIGNAL >= 0) && \
+    (!SERVO_POWER_ENABLED || ((PIN_SERVO_POWER >= 0) && (SERVO_POWER_ON_LEVEL >= 0)))
 #define SERVO_HW 1
 #else
 #define SERVO_HW 0
@@ -47,17 +50,24 @@ static void pwmDetach() {
 }
 
 static void powerPin(bool on) {
+#if SERVO_POWER_ENABLED
   digitalWrite(PIN_SERVO_POWER, on ? SERVO_POWER_ON_LEVEL : !SERVO_POWER_ON_LEVEL);
+#else
+  (void)on;
+#endif
 }
 #endif
 
 void begin() {
 #if SERVO_HW
+  // Señal primero: sin PWM y con pull-down desde el arranque.
+  pinMode(PIN_SERVO_SIGNAL, INPUT_PULLDOWN);
+#if SERVO_POWER_ENABLED
   // Primero el nivel y luego el modo, para no dar un pulso de encendido.
   digitalWrite(PIN_SERVO_POWER, !SERVO_POWER_ON_LEVEL);
   pinMode(PIN_SERVO_POWER, OUTPUT);
   powerPin(false);
-  pinMode(PIN_SERVO_SIGNAL, INPUT_PULLDOWN);
+#endif
 #endif
   powered_ = false;
   angle_ = 1000.0f;

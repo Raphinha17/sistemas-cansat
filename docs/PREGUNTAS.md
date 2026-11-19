@@ -8,8 +8,14 @@ código mientras no haya respuesta. Al confirmar, actualizar `firmware/include/c
 
 **P1. Pines externos.** SDA/SCL del bus de sensores, señal del servo, energía del servo,
 reed, enclavamiento y ADC de la pila.
-- SUPOSICIÓN: ninguna. Están como `TODO_CONFIRMAR` en `config.h` y el entorno
-  `heltec_wifi_lora_32_V3` no compila (#error) hasta que se den.
+- RESUELTO en parte (electrónica): SDA = GPIO41, SCL = GPIO42 (BMP280 y MPU6500 en el
+  mismo bus), señal del servo = GPIO7, sin pin de energía del servo (ver P30).
+  Verificado en `pins_arduino.h` de la variante: no chocan con el SX1262 (8-14), la OLED
+  (17, 18, 21), `Vext` (36) ni el LED (35). GPIO41/42 son además el `SDA`/`SCL` por
+  defecto de la variante, y GPIO7 no es pin de arranque (strapping: 0, 3, 45, 46).
+- Pendientes: reed, enclavamiento y ADC de la pila. Siguen como `TODO_CONFIRMAR` y los
+  entornos `heltec_wifi_lora_32_V3` y `heltec_demo` no compilan (#error) hasta que se den.
+  Para el banco existe `heltec_banco` (sin reed ni ADC; NUNCA para vuelo).
 - Nota: en la Heltec V3, GPIO17/18 son el I2C de la pantalla OLED y GPIO36 es `Vext`
   (alimentación conmutada de la OLED y del conector). ¿Los sensores van en el mismo bus
   que la OLED? ¿Se alimentan de `Vext` (entonces el firmware debe encenderlo)?
@@ -22,9 +28,7 @@ debe escribir el pin al arrancar, y cuándo puede soltarlo? ¿El reed se lee com
   (`REED_ACTIVE_LEVEL 0`, `REED_PULLUP 1` en `config.h`).
 
 **P2b. Energía del servo.** ¿Qué nivel enciende el servo (`SERVO_POWER_ON_LEVEL`)?
-- SUPOSICIÓN: ninguna. Está como `TODO_CONFIRMAR` en `config.h` y forma parte del mismo
-  `#error` que los pines. Aun así, el hardware debe dejar el servo apagado por defecto
-  mientras el ESP32 arranca (antes de que el firmware configure el pin).
+- RESUELTO: no hay pin de energía (`SERVO_POWER_ENABLED 0`). Ver P30.
 
 **P3. Direcciones I2C.** BMP280 0x76/0x77 (pin SDO) y MPU6500 0x68/0x69 (pin AD0).
 - SUPOSICIÓN: BMP280 = 0x76, MPU6500 = 0x68.
@@ -215,6 +219,27 @@ tras 1 s, se decide el estado:
   el servo y el radio reales.
 - SUPOSICIÓN: solo se puede entrar en los estados 0 y 1, no escribe NVS, y una línea es
   un ciclo de control (el ritmo lo pone la PC).
+
+**P30. Servo sin pin de energía (riesgo de giro al arrancar).** El MG90S se alimenta
+directo del regulador de 5 V, así que tiene energía desde que se enciende la placa.
+- Riesgo: un servo analógico con energía y una señal flotante o con ruido puede girar.
+  Esto puede pasar durante el arranque del ESP32 (antes de que el firmware configure
+  GPIO7), al reiniciarse en vuelo, o si un pulso espurio en la línea se interpreta como
+  orden. Un giro hacia -80° en tierra o en el cohete liberaría el mecanismo antes de
+  tiempo. Además, al conectar la pila el servo puede dar un tirón y una caída de tensión
+  del regulador puede reiniciar la placa.
+- Qué hace el firmware: GPIO7 queda en entrada con pull-down desde `servo_hw::begin()`
+  (lo primero de `power::begin()`), y solo se genera PWM cuando la máquina de estados lo
+  pide, es decir, desde el estado 3 (CAIDA, -10°) en adelante. En `heltec_demo` y
+  `heltec_banco` también hay PWM a -10° mientras el demo está armado. Sin PWM, el MG90S
+  no hace fuerza: el mecanismo queda retenido solo por fricción y por su geometría.
+- SUPOSICIÓN: sin pulsos el MG90S se queda quieto, y en reset el GPIO7 del ESP32-S3 está
+  en alta impedancia (no es pin de arranque). Se recomienda a electrónica una
+  resistencia de pull-down externa de 10 kΩ en la señal (el pull-down interno solo actúa
+  después de que corre el firmware), que el mecanismo no se pueda abrir sin fuerza del
+  servo, y probar en banco varios arranques y reinicios con el mecanismo montado.
+  Alternativa más segura: un MOSFET de energía (`SERVO_POWER_ENABLED 1` con
+  `PIN_SERVO_POWER` y `SERVO_POWER_ON_LEVEL`; el código ya lo soporta).
 
 ## Resueltas
 (ninguna todavía)

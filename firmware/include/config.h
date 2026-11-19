@@ -1,7 +1,9 @@
 // Configuración del firmware CanSat Hellmary. Ver docs/SPEC.md y docs/PREGUNTAS.md.
 //
-// Pines externos: NO inventar. Quedan como TODO_CONFIRMAR hasta que el equipo de
-// electrónica los confirme. Los pines del radio SX1262 NO están aquí: salen de la
+// Pines externos: NO inventar. Los no confirmados quedan como TODO_CONFIRMAR hasta que
+// el equipo de electrónica los confirme. Confirmados por electrónica: I2C (41/42) y
+// señal del servo (7); verificados contra pins_arduino.h de la variante: no los usan
+// el SX1262 (8-14), la OLED (17, 18, 21), Vext (36) ni el LED (35). Los pines del radio SX1262 NO están aquí: salen de la
 // variante de la placa (pins_arduino.h de heltec_wifi_lora_32_V3).
 #pragma once
 
@@ -9,19 +11,25 @@
 #define TODO_CONFIRMAR (-1)
 
 // ---------------------------------------------------------------------------
-// Pines externos (pendientes)
+// Pines externos
 // ---------------------------------------------------------------------------
-#define PIN_I2C_SDA TODO_CONFIRMAR      // SDA del bus de BMP280 + MPU6500
-#define PIN_I2C_SCL TODO_CONFIRMAR      // SCL del bus de BMP280 + MPU6500
-#define PIN_SERVO_SIGNAL TODO_CONFIRMAR // señal PWM del MG90S (con pull-down externo)
-#define PIN_SERVO_POWER TODO_CONFIRMAR  // habilitación de energía del servo
+#define PIN_I2C_SDA 41                  // SDA del bus de BMP280 + MPU6500 (confirmado)
+#define PIN_I2C_SCL 42                  // SCL del bus de BMP280 + MPU6500 (confirmado)
+#define PIN_SERVO_SIGNAL 7              // señal PWM del MG90S (confirmado)
+
+// Energía del servo: NO hay pin de habilitación; el MG90S se alimenta directo del
+// regulador de 5 V (PREGUNTAS P30). El firmware solo garantiza que no haya PWM fuera del
+// estado 3 en adelante (señal en entrada con pull-down mientras tanto).
+#define SERVO_POWER_ENABLED 0
+#define PIN_SERVO_POWER (-1)            // no existe (SERVO_POWER_ENABLED = 0)
+
 #define PIN_REED TODO_CONFIRMAR         // lectura del reed
 #define PIN_LATCH TODO_CONFIRMAR        // enclavamiento de encendido (GPIO)
 #define PIN_BAT_ADC TODO_CONFIRMAR      // ADC de la pila de 9 V (con divisor)
 
-// Nivel lógico de PIN_SERVO_POWER que ENCIENDE el servo (HIGH=1 o LOW=0). Pendiente
-// (PREGUNTAS P2b): depende del transistor/MOSFET que diseñe electrónica.
-#define SERVO_POWER_ON_LEVEL TODO_CONFIRMAR
+// Nivel lógico de PIN_SERVO_POWER que ENCIENDE el servo. Sin uso mientras
+// SERVO_POWER_ENABLED = 0.
+#define SERVO_POWER_ON_LEVEL (-1)
 // Nivel de PIN_REED con el imán presente (solo lo usa el modo DEMO_SEPARACION para
 // armar). Suposición: LOW, con pull-up interno (PREGUNTAS P2).
 #define REED_ACTIVE_LEVEL 0
@@ -31,15 +39,31 @@
 // que diseñe electrónica. 0 = desconocido -> no se reporta batería (bateria = 0).
 #define BAT_DIVIDER_RATIO 0.0f
 
-// La verificación se activa SOLO en el entorno de vuelo (heltec_wifi_lora_32_V3),
-// que define CANSAT_FLIGHT_BOARD. Nunca en native ni en rx_station.
+// ENTORNO DE BANCO (heltec_banco, define CANSAT_BANCO): desactiva el reed y el ADC de la
+// pila (batería = 0; el modo demo se arma solo con el comando serial ARMAR) y permite
+// compilar con pines pendientes.
+// *** NUNCA USAR heltec_banco PARA VUELO: sin reed, sin batería y sin verificación de
+// *** pines. Solo para probar sensores y servo en la mesa.
+#ifdef CANSAT_BANCO
+#undef PIN_REED
+#define PIN_REED (-1)
+#undef PIN_BAT_ADC
+#define PIN_BAT_ADC (-1)
+#ifndef PERMITIR_PINES_PENDIENTES
+#define PERMITIR_PINES_PENDIENTES
+#endif
+#endif
+
+// La verificación se activa SOLO en los entornos de la placa (vuelo y demo), que
+// definen CANSAT_FLIGHT_BOARD. Nunca en native ni en rx_station.
 // Para compilar a pesar de los pines pendientes (solo pruebas de compilación):
 //   -D PERMITIR_PINES_PENDIENTES
 #if defined(CANSAT_FLIGHT_BOARD) && !defined(PERMITIR_PINES_PENDIENTES)
 #if (PIN_I2C_SDA == TODO_CONFIRMAR) || (PIN_I2C_SCL == TODO_CONFIRMAR) ||           \
-    (PIN_SERVO_SIGNAL == TODO_CONFIRMAR) || (PIN_SERVO_POWER == TODO_CONFIRMAR) || \
-    (PIN_REED == TODO_CONFIRMAR) || (PIN_LATCH == TODO_CONFIRMAR) ||               \
-    (PIN_BAT_ADC == TODO_CONFIRMAR) || (SERVO_POWER_ON_LEVEL == TODO_CONFIRMAR)
+    (PIN_SERVO_SIGNAL == TODO_CONFIRMAR) || (PIN_REED == TODO_CONFIRMAR) ||         \
+    (PIN_LATCH == TODO_CONFIRMAR) || (PIN_BAT_ADC == TODO_CONFIRMAR) ||             \
+    (SERVO_POWER_ENABLED &&                                                         \
+     ((PIN_SERVO_POWER == TODO_CONFIRMAR) || (SERVO_POWER_ON_LEVEL == TODO_CONFIRMAR)))
 #error "Pines externos pendientes (TODO_CONFIRMAR) en include/config.h; ver docs/PREGUNTAS.md"
 #endif
 #endif
