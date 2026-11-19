@@ -2,6 +2,7 @@
 #include <string.h>
 #include <unity.h>
 
+#include "log_usage.h"
 #include "telemetry_pack.h"
 
 void setUp() {}
@@ -61,10 +62,24 @@ static void test_saturation() {
   TEST_ASSERT_EQUAL_UINT32(0, p.presion_Pa);
 }
 
+static void test_log_usage() {
+  TEST_ASSERT_EQUAL_UINT(0, logPercent(0, 1000));
+  TEST_ASSERT_EQUAL_UINT(50, logPercent(500, 1000));
+  TEST_ASSERT_EQUAL_UINT(99, logPercent(999, 1000));
+  TEST_ASSERT_EQUAL_UINT(0, logPercent(10, 0));
+  TEST_ASSERT_FALSE(logNeedsWarning(0, 1000));
+  TEST_ASSERT_FALSE(logNeedsWarning(500, 1000));  // exactamente 50 %: sin aviso
+  TEST_ASSERT_TRUE(logNeedsWarning(501, 1000));
+  TEST_ASSERT_TRUE(logNeedsWarning(1000, 1000));
+  TEST_ASSERT_FALSE(logNeedsWarning(10, 0));
+  TEST_ASSERT_EQUAL_UINT(50, logPercent(3000000ull * 1, 6000000));  // sin desbordar
+}
+
 int main(int, char **) {
   UNITY_BEGIN();
   RUN_TEST(test_size);
   RUN_TEST(test_scaling_and_layout);
   RUN_TEST(test_saturation);
+  RUN_TEST(test_log_usage);
   return UNITY_END();
 }

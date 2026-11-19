@@ -42,6 +42,7 @@
 
 #include "config.h"
 #include "flight_core.h"
+#include "log_usage.h"
 #include "logger.h"
 #include "mission_store.h"
 #include "packet.h"
@@ -362,7 +363,9 @@ static bool handleCommand(const String &cmd) {
     logger::dump(Serial);
   } else if (cmd == "BORRAR") {
     logger::erase();
-    Serial.println("OK log borrado");
+    Serial.printf("OK log borrado: log=%u/%u B (%u %%)\n", (unsigned)logger::sizeBytes(),
+                  (unsigned)logger::capacityBytes(),
+                  logPercent(logger::sizeBytes(), logger::capacityBytes()));
   } else if (cmd == "MISION") {
     MissionRecord r;
     if (mission_store::load(r))
@@ -581,6 +584,12 @@ void setup() {
   Serial.printf("IMU %s (WHO_AM_I=0x%02X)  BARO %s\n", sensors.imuOk() ? "OK" : "FALLA",
                 sensors.imuWhoAmI(), sensors.baroOk() ? "OK" : "FALLA");
   Serial.printf("LittleFS %s\n", logger::begin() ? "OK" : "FALLA");
+  Serial.printf("Log %u/%u B (%u %%)\n", (unsigned)logger::sizeBytes(),
+                (unsigned)logger::capacityBytes(),
+                logPercent(logger::sizeBytes(), logger::capacityBytes()));
+  if (logNeedsWarning(logger::sizeBytes(), logger::capacityBytes()))
+    Serial.printf("# AVISO: log al %u %%, usa BORRAR antes del vuelo\n",
+                  logPercent(logger::sizeBytes(), logger::capacityBytes()));
   const int16_t rs = telemetry::begin();
   Serial.printf("Radio %s (codigo %d)\n", rs == 0 ? "OK" : "FALLA", rs);
   Serial.printf("NVS %s\n", mission_store::begin() ? "OK" : "FALLA");

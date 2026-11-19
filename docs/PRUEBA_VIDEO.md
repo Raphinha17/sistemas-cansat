@@ -87,6 +87,18 @@ pio device monitor -b 115200
 - [ ] Cámara con el LED de la placa, el mecanismo y, si se puede, el monitor serial o la
       estación terrena en cuadro.
 
+## Checklist previo al vuelo (regla fija, en este orden)
+
+**`MISION_BORRAR`, `BORRAR`, `MODO A`, `STAT`.**
+
+1. `MISION_BORRAR` (borra la misión de NVS y reinicia; el arranque no debe decir
+   `# REINICIO EN VUELO`).
+2. `BORRAR` (vacía el log completo; responde `OK log borrado: log=0/... B (0 %)`).
+   Es obligatorio si el arranque mostró `# AVISO: log al X %, usa BORRAR antes del vuelo`
+   (sale cuando el log pasa del 50 %).
+3. `MODO A`.
+4. `STAT`: `despliegue=A`, `estado=1`, `log=0/...`, sin fallos.
+
 ## Antes de cada vuelo (recordatorio)
 
 1. Cargar `heltec_wifi_lora_32_V3` (el arranque dice `firmware de vuelo`).
