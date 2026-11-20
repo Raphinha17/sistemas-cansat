@@ -93,7 +93,7 @@ pio device monitor -b 115200
 
 1. `MISION_BORRAR` (borra la misión de NVS y reinicia; el arranque no debe decir
    `# REINICIO EN VUELO`).
-2. `BORRAR` (vacía el log completo; responde `OK log borrado: log=0/... B (0 %)`).
+2. `BORRAR` (vacía el log completo; responde `OK log vaciado (X B liberados): log=0/... B (0 %)`).
    Es obligatorio si el arranque mostró `# AVISO: log al X %, usa BORRAR antes del vuelo`
    (sale cuando el log pasa del 50 %).
 3. `MODO A`.
@@ -104,3 +104,14 @@ pio device monitor -b 115200
 1. Cargar `heltec_wifi_lora_32_V3` (el arranque dice `firmware de vuelo`).
 2. `MISION_BORRAR`, luego `MODO A` y `STAT` (`despliegue=A`, `estado=1`).
 3. Esperar 30 s quieto en el suelo (base de p0 lista, bandera 0x01) antes del despegue.
+
+## Log lleno
+
+El log (LittleFS, ~1.4 MB) **deja de guardar cuando se llena** (no sobrescribe). Para que
+los datos de vuelo nunca se pierdan: al despegar (ASCENSO) o al armar el demo, si quedan
+menos de 600 KB libres, la placa **vacía sola el log de arranque y pruebas** y avisa
+`# AVISO: log vaciado al despegar/armar (...)`. Aun así, haz `BORRAR` en el checklist:
+así el log del vuelo empieza limpio. `STAT` muestra `log=usado/cap (X %)` y
+`sin_espacio=N` (registros que no se pudieron guardar; debe ser 0 en el vuelo).
+Si un comando no se reconoce, la placa imprime `ERR comando desconocido: "<texto>"`
+con lo que recibió.

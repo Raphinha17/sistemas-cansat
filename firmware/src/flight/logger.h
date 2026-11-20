@@ -12,6 +12,7 @@
 enum : uint8_t {
   LOG_EV_ARRANQUE = 1,  // valor = modo de despliegue al arrancar ('A', 'B' o 'C')
   LOG_EV_MODO = 2,      // valor = nuevo modo de despliegue (comando MODO)
+  LOG_EV_LOG_VACIADO = 3,  // se vació el log al despegar/armar por falta de espacio
 };
 
 typedef struct __attribute__((packed)) {

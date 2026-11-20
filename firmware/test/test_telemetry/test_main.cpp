@@ -72,6 +72,11 @@ static void test_log_usage() {
   TEST_ASSERT_TRUE(logNeedsWarning(501, 1000));
   TEST_ASSERT_TRUE(logNeedsWarning(1000, 1000));
   TEST_ASSERT_FALSE(logNeedsWarning(10, 0));
+  const size_t cap = 1415577;  // el log lleno de la prueba en hardware
+  TEST_ASSERT_TRUE(logNeedsRoom(1415552, cap));
+  TEST_ASSERT_TRUE(logNeedsRoom(cap - LOG_RESERVA_VUELO_B + 1, cap));
+  TEST_ASSERT_FALSE(logNeedsRoom(cap - LOG_RESERVA_VUELO_B, cap));
+  TEST_ASSERT_FALSE(logNeedsRoom(0, cap));
   TEST_ASSERT_EQUAL_UINT(50, logPercent(3000000ull * 1, 6000000));  // sin desbordar
 }
 

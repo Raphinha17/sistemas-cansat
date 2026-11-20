@@ -85,6 +85,7 @@ static volatile uint8_t pub_demo = 0;              // 0 sin armar, 1 cuenta, 2 d
 // Estadísticas (escritas por control, leídas por comms solo para diagnóstico)
 static volatile uint32_t st_cycles = 0, st_overruns = 0, st_max_us = 0;
 static volatile uint32_t st_log_drops = 0, st_imu_err = 0, st_baro_err = 0;
+static uint32_t st_log_lost = 0;  // registros sin guardar por log lleno (solo comms)
 static volatile uint32_t st_sim_drops = 0;
 static SimLink sim_link;  // integridad de las líneas SIM (solo la usa comms)
 
@@ -350,9 +351,10 @@ static bool handleCommand(const String &cmd) {
                   (unsigned long)st_baro_err);
     Serial.printf("tx_ok=%lu tx_omitidos=%lu tx_err=%lu\n", (unsigned long)telemetry::sent(),
                   (unsigned long)telemetry::skipped(), (unsigned long)telemetry::errors());
-    Serial.printf("log=%u/%u B descartados=%lu nvs_escrituras=%lu\n",
+    Serial.printf("log=%u/%u B (%u %%) descartados=%lu sin_espacio=%lu nvs_escrituras=%lu\n",
                   (unsigned)logger::sizeBytes(), (unsigned)logger::capacityBytes(),
-                  (unsigned long)st_log_drops, (unsigned long)mission_store::writes());
+                  logPercent(logger::sizeBytes(), logger::capacityBytes()),
+                  (unsigned long)st_log_drops, (unsigned long)st_log_lost, (unsigned long)mission_store::writes());
     Serial.printf("sim_rx=%lu sim_descartadas=%lu sim_invalidas=%lu sim_huecos=%lu "
                   "sim_repetidas=%lu sim_repite=%lu sim_crc=%u\n",
                   (unsigned long)sim_link.accepted(), (unsigned long)st_sim_drops,
@@ -362,9 +364,11 @@ static bool handleCommand(const String &cmd) {
   } else if (cmd == "DUMP") {
     logger::dump(Serial);
   } else if (cmd == "BORRAR") {
+    const size_t antes = logger::sizeBytes();
     logger::erase();
-    Serial.printf("OK log borrado: log=%u/%u B (%u %%)\n", (unsigned)logger::sizeBytes(),
-                  (unsigned)logger::capacityBytes(),
+    st_log_lost = 0;
+    Serial.printf("OK log vaciado (%u B liberados): log=%u/%u B (%u %%)\n", (unsigned)antes,
+                  (unsigned)logger::sizeBytes(), (unsigned)logger::capacityBytes(),
                   logPercent(logger::sizeBytes(), logger::capacityBytes()));
   } else if (cmd == "MISION") {
     MissionRecord r;
@@ -465,8 +469,9 @@ static void commsTask(void *) {
   for (;;) {
     // Espera corta por registros del log; despierta al menos cada 5 ms.
     if (xQueueReceive(log_queue, &pkt, pdMS_TO_TICKS(5)) == pdTRUE) {
-      logger::append(pkt);
-      while (xQueueReceive(log_queue, &pkt, 0) == pdTRUE) logger::append(pkt);
+      if (!logger::append(pkt)) st_log_lost++;
+      while (xQueueReceive(log_queue, &pkt, 0) == pdTRUE)
+        if (!logger::append(pkt)) st_log_lost++;
     }
     if (xQueueReceive(tx_queue, &pkt, 0) == pdTRUE) telemetry::send(pkt);
     telemetry::poll();
@@ -480,6 +485,18 @@ static void commsTask(void *) {
     }
 
     // Avisos por serial
+    // Al despegar (o al armar el demo) el log debe tener sitio para todo el vuelo: si no,
+    // se vacía el log de arranque y pruebas (los datos de vuelo nunca se pierden).
+    if ((pub_state == ST_ASCENSO && last_state <= ST_TIERRA) ||
+        (pub_demo == 1 && last_demo == 0)) {
+      if (logNeedsRoom(logger::sizeBytes(), logger::capacityBytes())) {
+        const size_t antes = logger::sizeBytes();
+        logger::erase();
+        logger::appendEvent(LOG_EV_LOG_VACIADO, 0, millis());
+        Serial.printf("# AVISO: log vaciado al despegar/armar (%u B de arranque y pruebas "
+                      "descartados) para guardar el vuelo\n", (unsigned)antes);
+      }
+    }
     if (pub_state != last_state) {
       last_state = pub_state;
       Serial.printf("# ESTADO %u banderas=0x%02X t_ms=%lu\n", last_state, pub_flags,
@@ -536,6 +553,8 @@ static void commsTask(void *) {
                 sim_link.reject(millis());
                 sendResendRequest();
               } else {
+                Serial.printf("ERR comando desconocido: \"%s\" (%u car.)\n", cmd.c_str(),
+                              (unsigned)cmd.length());
                 printHelp();
               }
             }

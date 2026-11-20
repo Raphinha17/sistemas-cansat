@@ -101,11 +101,13 @@ Modo por defecto: despliegue=A (liberacion valida > 240 m, autogiro a 200 m, res
 0100...,-31.5,9.75        <- una línea HEX,RSSI,SNR por paquete recibido
 ```
 
-### 1.4b Antes de cada prueba
+### 1.4b Antes de cada prueba (checklist: `MISION_BORRAR`, `BORRAR`, `MODO A`, `STAT`)
 ```powershell
 # En el monitor de la placa A:
 MISION_BORRAR     # borra el registro de misión de NVS y reinicia la placa
+BORRAR            # vacía el log: "OK log vaciado (X B liberados)"; si no, se llena (100 %)
 MODO A            # el modo de despliegue se guarda en NVS: déjalo en A
+STAT              # log=0/... (0 %), estado=1, despliegue=A
 # (sim_serial.py ya manda SIM_INICIO y, con --modo, MODO; no manda MISION_BORRAR)
 ```
 Si el arranque dice `# REINICIO EN VUELO`, hay una misión guardada: `MISION_BORRAR`.
@@ -480,3 +482,4 @@ Una prueba a nivel de suelo es más exigente que el vuelo (el suelo atenúa la s
 | Vuelo con disparo muy temprano, h_max de cientos de metros de más | Líneas dañadas aceptadas (firmware o `sim_serial.py` sin CRC). Ver "Integridad del enlace" en §1.7. |
 | Pérdida alta con las placas a 1 m | Revisa antenas; separa las placas ≥ 1 m (saturación del receptor). |
 | Quedó el modo B o C guardado | `MODO A` en el monitor. |
+| `# AVISO: log al X %` al arrancar | El log pasó del 50 %: `BORRAR`. Lleno (100 %) deja de guardar; al despegar o armar la placa lo vacía sola si quedan < 600 KB. |
