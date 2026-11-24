@@ -113,6 +113,19 @@ Escribe un comando y pulsa Enter. Salir: **Ctrl + C**. Un solo programa puede te
 un puerto: **cierra el monitor antes de correr `sim_serial.py` o la estación** en ese mismo
 puerto. Si la placa se reinicia al abrir el monitor, espera 3 s.
 
+**Monitor propio (`tools/monitor.py`, Linux):** alternativa que solo envía líneas
+completas. Lo que llega se imprime en pantalla; lo que escribes **no se manda hasta pulsar
+Enter** y entonces va todo junto, en mayúsculas y sin espacios sobrantes (`modo b` →
+`MODO B`). Una línea vacía no envía nada; nunca se mandan caracteres sueltos. No reinicia
+la placa al abrir (DTR y RTS apagados). Salir: `/salir` o Ctrl+C; si se desconecta la placa
+avisa y sale sin traceback.
+```bash
+.venv/bin/python tools/monitor.py --port $TX      # --port por defecto: $TX o /dev/ttyUSB1
+.venv/bin/python tools/monitor.py --port $RX --baud 115200
+```
+(`tools/cmd_serial.py` manda comandos sueltos y muestra la respuesta:
+`.venv/bin/python tools/cmd_serial.py STAT "MODO B"`.)
+
 Arranque esperado de la placa TX (sin sensores):
 ```
 CanSat Hellmary - MODO DEMO_SEPARACION (disparo 10 s tras ARMAR o toque largo de PRG) - BANCO: ...
