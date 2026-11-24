@@ -28,7 +28,9 @@ El entorno `native` usa `g++` si existe; si no, el compilador de `zig` (`pip ins
 en el `.venv`). Las pruebas generan sus datos con `tools/flight_sim.py --raw-csv`.
 
 Pines (`include/config.h`): I2C SDA 41 / SCL 42 y señal del servo 7, confirmados. El
-servo no tiene pin de energía (`SERVO_POWER_ENABLED 0`): solo se genera PWM desde el
+servo se alimenta desde el riel de 5 V del regulador (MP1584), no desde el pin 5V ni el
+USB de la Heltec, con GND común (por confirmar con electrónica), y no tiene pin de energía
+(`SERVO_POWER_ENABLED 0`): solo se genera PWM desde el
 estado 3 (riesgo documentado en `docs/PREGUNTAS.md` P30). El ADC de la pila es opcional
 (`BATT_ADC_ENABLED 0` por defecto: batería 0 en el paquete). Los entornos de la placa
 tienen un `#error` intencional si falta el pin de una función activa (p. ej. el ADC con

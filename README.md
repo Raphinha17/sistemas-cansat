@@ -172,8 +172,9 @@ vuelo o prueba se ejecutan `MISION_BORRAR`, `BORRAR`, `MODO B` y `STAT`** (check
   dispara con `ARMAR` o el botón PRG) y `heltec_banco` no mide la pila. Para vuelo, solo
   `heltec_wifi_lora_32_V3`.
 - **No presionar el botón PRG al encender la placa:** GPIO0 es un pin de arranque.
-- **El servo se alimenta por separado, con tierra (GND) común** con la placa. Hay un riesgo
-  documentado de giro al arrancar (`docs/PREGUNTAS.md`, P30).
+- **El servo se alimenta desde el riel de 5 V del regulador (MP1584), no desde el pin 5V ni
+  el USB de la Heltec, y todos los GND van unidos (GND común).** Esto debe confirmarse con
+  electrónica. Hay un riesgo documentado de giro al arrancar (`docs/PREGUNTAS.md`, P30).
 - **No subir `ambiente.sh` ni los datos de `ground/data/`**: están en `.gitignore`.
 - Este repositorio es solo de sistemas: el CAD y la electrónica se manejan aparte.
 
@@ -192,9 +193,10 @@ Otros documentos: [protocol/packet.md](protocol/packet.md) (paquete de 32 bytes)
 
 ## Cómo contribuir
 
-1. Crear una rama para cada cambio (`git switch -c nombre-del-cambio`); no trabajar
-   directamente sobre `main`.
-2. Correr las pruebas (sección *Uso rápido*) **antes de cada commit**; deben pasar todas.
-3. Describir en el mensaje del commit qué cambió y por qué, y abrir un *pull request* para
-   que otro integrante lo revise.
+El equipo trabaja directamente sobre `main`:
+
+1. `git pull` antes de empezar, para partir de la versión más reciente.
+2. Hacer el cambio y correr las pruebas (sección *Uso rápido*); deben pasar todas.
+3. `git add` de los archivos modificados, `git commit` con un mensaje claro (qué cambió y
+   por qué) y `git push` a `main`.
 4. Las dudas o suposiciones nuevas se anotan en `docs/PREGUNTAS.md`.

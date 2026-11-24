@@ -229,6 +229,8 @@ tras 1 s, se decide el estado:
 
 **P30. Servo sin pin de energía (riesgo de giro al arrancar).** El MG90S se alimenta
 directo del regulador de 5 V, así que tiene energía desde que se enciende la placa.
+  Se alimenta desde el riel de 5 V del regulador (MP1584), no desde el pin 5V ni el USB de
+  la Heltec, con todos los GND unidos (GND común); por confirmar con electrónica.
 - Riesgo: un servo analógico con energía y una señal flotante o con ruido puede girar.
   Esto puede pasar durante el arranque del ESP32 (antes de que el firmware configure
   GPIO7), al reiniciarse en vuelo, o si un pulso espurio en la línea se interpreta como
