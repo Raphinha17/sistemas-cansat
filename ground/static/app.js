@@ -408,7 +408,10 @@ $("reportbtn").onclick = async () => {
     const r = await fetch("/api/report", { method: "POST" });
     const j = await r.json().catch(() => ({}));
     if (!r.ok) alert(j.error || "No se pudo generar el reporte");
-    else btn.title = "Último reporte: " + j.carpeta;   // el registro de eventos muestra la carpeta
+    else {
+      btn.title = "Último reporte: " + j.carpeta;
+      if (j.aviso) alert("Reporte generado en:\n" + j.carpeta + "\n\nNo se pudo abrir la carpeta: " + j.aviso);
+    }   // el registro de eventos muestra la carpeta
   } catch (e) {
     alert("No se pudo generar el reporte: " + e);
   } finally {

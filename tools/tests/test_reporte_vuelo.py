@@ -5,6 +5,8 @@ import math
 import os
 import random
 
+import numpy as np
+
 import pytest
 
 import flight_sim as S
@@ -67,7 +69,8 @@ def test_numeros_de_la_tabla():
     assert r["vz_max_caida"]["vz_ms"] == 30
     ds = r["descenso"]
     assert ds["media_ms"] == pytest.approx(10) and ds["mediana_ms"] == pytest.approx(10)
-    assert ds["en_banda"] and ds["pct_en_banda"] == 100 and ds["n"] == 40
+    assert ds["en_banda"] and ds["pct_en_banda"] == 100 and ds["n"] == 30   # sin los 2 s iniciales
+    assert ds["ultimos5_ms"] == pytest.approx(10) and ds["ultimos5_en_banda"]
     assert ds["media_altura_tiempo_ms"] == pytest.approx(10)
     assert r["impacto"]["g"] == 5
     assert r["post_aterrizaje"]["s"] == pytest.approx(19.8) and r["post_aterrizaje"]["cumple"]
@@ -77,7 +80,12 @@ def test_numeros_de_la_tabla():
     assert r["rssi"]["prom"] == -80 and r["snr"]["prom"] == 9
     assert r["huecos"]["n"] == 0            # 5 paquetes perdidos = 1.2 s: no es hueco
     filas = dict(R.filas_tabla(r, R.Reloj(d)))
-    assert filas["¿Descenso dentro de 8 a 12 m/s?"].startswith("Sí")
+    k = [x for x in filas if x.startswith("Descenso con autogiro: mediana")][0]
+    assert filas[k].startswith("10.00 m/s · Sí")
+    assert filas["Impacto (aceleración máxima al aterrizar)"] == "no medible con telemetría (usa --log)"
+    assert dict(R.filas_tabla(r, R.Reloj(d), con_log=True))[
+        "Impacto (aceleración máxima al aterrizar)"] == "5.00 g"
+    assert any(x.startswith("Despliegue del autogiro") and x.endswith("*") for x in filas)
     assert filas["¿Siguió transmitiendo ≥ 10 s después de aterrizar?"] == "Sí, 19.8 s"
     assert filas["Paquetes recibidos / esperados"] == "475 / 480"
 
@@ -89,6 +97,7 @@ def test_descenso_fuera_de_banda_y_poca_transmision():
             x["vz_ms"] = -14.0
     r = R.analizar(R.construir(regs))
     assert r["descenso"]["media_ms"] == pytest.approx(14) and not r["descenso"]["en_banda"]
+    assert not r["descenso"]["media_en_banda"] and not r["descenso"]["ultimos5_en_banda"]
     assert r["post_aterrizaje"]["s"] == pytest.approx(4) and not r["post_aterrizaje"]["cumple"]
     assert r["enlace"]["perdidos"] == 0
     filas = dict(R.filas_tabla(r, R.Reloj(R.construir(regs))))
@@ -303,3 +312,70 @@ def test_cli_sesion_mas_reciente(tmp_path, monkeypatch):
     assert R.main(["--dpi", "40", "--json"]) == 0
     assert os.path.isdir(tmp_path / "reporte_20261201_120000")
     assert R.main([str(vacia)]) == 2
+
+
+def test_descenso_excluye_los_primeros_2s_y_ultimos_5s():
+    regs = vuelo_sintetico(perder=())
+    for x in regs:                       # frenado inicial rápido, luego 10, y 6 m/s al final
+        if x["estado"] == T.DESCENSO:
+            t = x["t_ms"] / 1000
+            x["vz_ms"] = -25.0 if t < 70 else (-6.0 if t >= 74 else -10.0)
+    ds = R.analizar(R.construir(regs))["descenso"]
+    assert ds["mediana_ms"] == pytest.approx(10) and ds["en_banda"]   # 70 a 74 s dominan
+    assert 6 < ds["ultimos5_ms"] < 10                  # mezcla de 10 y 6 m/s (desde t=71)
+    assert ds["ultimos5_en_banda"] == (8 <= ds["ultimos5_ms"] <= 12)
+
+
+def test_yaw_no_cruza_el_salto_de_180():
+    t = np.arange(0, 10, 0.2)
+    y = ((t * 100 + 170 + 180) % 360) - 180
+    tt, yy = R._lineas_t(t, y, salto=180)
+    fin = np.isfinite(yy)
+    pares = np.flatnonzero(fin[:-1] & fin[1:])           # segmentos que sí se dibujan
+    assert np.abs(np.diff(yy)[pares]).max() <= 180
+    y[10] = np.nan                                       # un NaN en medio de un salto
+    tt, yy = R._lineas_t(t, y, salto=180)
+    fin = np.isfinite(yy)
+    pares = np.flatnonzero(fin[:-1] & fin[1:])
+    assert np.abs(np.diff(yy)[pares]).max() <= 180
+
+
+def test_abrir_carpeta_por_plataforma(monkeypatch, tmp_path):
+    llamadas = []
+
+    class Res:
+        returncode, stderr = 0, ""
+
+    monkeypatch.setattr(R.subprocess, "run", lambda cmd, **kw: llamadas.append(cmd) or Res())
+    monkeypatch.setattr(R.sys, "platform", "linux")
+    assert R.abrir_carpeta(str(tmp_path)) == (True, "")
+    monkeypatch.setattr(R.sys, "platform", "darwin")
+    assert R.abrir_carpeta(str(tmp_path))[0]
+    assert [c[0] for c in llamadas] == ["xdg-open", "open"]
+    abiertos = []
+    monkeypatch.setattr(R.sys, "platform", "win32")
+    monkeypatch.setattr(R.os, "startfile", lambda p: abiertos.append(p), raising=False)
+    assert R.abrir_carpeta(str(tmp_path))[0] and abiertos == [str(tmp_path)]
+    # falla: sin xdg-open o con código de error, devuelve el motivo sin lanzar
+    monkeypatch.setattr(R.sys, "platform", "linux")
+
+    def sin_comando(cmd, **kw):
+        raise FileNotFoundError("xdg-open")
+    monkeypatch.setattr(R.subprocess, "run", sin_comando)
+    ok, msg = R.abrir_carpeta(str(tmp_path))
+    assert not ok and "FileNotFoundError" in msg
+    Res.returncode, Res.stderr = 3, "sin entorno gráfico"
+    monkeypatch.setattr(R.subprocess, "run", lambda cmd, **kw: Res())
+    ok, msg = R.abrir_carpeta(str(tmp_path))
+    assert not ok and "sin entorno gráfico" in msg
+
+
+def test_cli_abrir_falla_sin_romper(tmp_path, monkeypatch, capsys):
+    pytest.importorskip("matplotlib")
+    csv_path, _ = vuelo_simulado(str(tmp_path), "20261201_140000", log=False, **S.MODES["B"])
+    monkeypatch.setattr(R, "abrir_carpeta", lambda p: (False, "no hay explorador"))
+    assert R.main([csv_path, "--dpi", "40", "--abrir"]) == 0
+    err = capsys.readouterr().err
+    assert "AVISO: no hay explorador" in err
+    md = open(os.path.join(tmp_path, "reporte_20261201_140000", "reporte.md"), encoding="utf-8").read()
+    assert "orden al servo" in md

@@ -487,9 +487,12 @@ banderas, altura y vz que calcula la placa); el reporte no recalcula la física.
 paquetes entre el fin del despliegue (primer DESCENSO) y el aterrizaje, como se pidió.
 "Dentro" = media y mediana en [8, 12] m/s; también se da el % de muestras en la banda y
 la media altura/tiempo (útil si los jueces cronometran).
-- Duda: los primeros ~1-2 s de DESCENSO el autogiro aún frena (vz de -30 a -10 m/s en la
-  sesión del 19-nov 17:27): suben la media (10.7 m/s contra mediana 10.0). ¿Se quiere
-  descartar el primer segundo o 2 s de DESCENSO? Hoy no se descarta nada.
+- DECIDIDO (24-nov): el valor principal es la mediana excluyendo los primeros 2 s de
+  DESCENSO (el autogiro aún frena); también se da la media sin ese tramo y el promedio de
+  los últimos 5 s antes del aterrizaje, cada uno con su Sí/No.
+- El impacto sin `--log` no se mide (la telemetría no captura el pico): la fila lo dice.
+- La altura de despliegue es la de la orden al servo (primer paquete con la bandera); el
+  efecto real llega ~0.5 s después (nota bajo la tabla).
 
 **P52. Velocidad vertical máxima en caída.** Máximo de -vz entre la liberación y el fin
 del despliegue (la caída es más rápida justo antes de que abra el autogiro). Sin

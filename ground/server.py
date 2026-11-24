@@ -165,10 +165,14 @@ class Station:
                 return 500, {"error": f"no se pudo generar el reporte: {err}"}
         finally:
             self.report_busy = False
+        aviso = next((l[6:].strip() for l in res.stderr.splitlines() if l.startswith("AVISO:")), "")
+        if aviso:
+            info["aviso"] = aviso
         parcial = " (sesión en curso: datos hasta ahora)" if self.recorder.active else ""
         await self.add_events([{"kind": "reporte", "level": "ok", "w": self.wall(),
                                 "m": self.stats.mission_s,
-                                "text": f"Reporte generado{parcial}: {info['carpeta']}"}])
+                                "text": f"Reporte generado{parcial}: {info['carpeta']}"
+                                        + (f" (AVISO: {aviso})" if aviso else "")}])
         return 200, dict(info, ok=True, csv=os.path.basename(csv_path))
 
     async def reset(self):

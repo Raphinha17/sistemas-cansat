@@ -50,6 +50,8 @@ DATA_DIR = os.path.join(ROOT, "ground", "data")
 LOGO = os.path.join(ROOT, "ground", "static", "logo.png")
 
 BANDA_DESCENSO = (8.0, 12.0)    # m/s, velocidad de descenso pedida con el autogiro
+DESC_EXCLUIR_S = 2.0            # s iniciales de DESCENSO que se excluyen (el autogiro aún frena)
+DESC_ULTIMOS_S = 5.0            # s antes del aterrizaje para la velocidad "final"
 T_POST_ATERRIZAJE = 10.0        # s que hay que seguir transmitiendo tras aterrizar
 HUECO_S = 3.0                   # s sin paquetes = hueco de enlace (como "enlace perdido")
 SEQ_RESTART_GAP = 30000         # igual que la estación: salto mayor = reinicio de la placa
@@ -460,22 +462,31 @@ def analizar(d: Datos) -> dict:
             r["vz_max_caida"] = {"t": float(tv[k]), "vz_ms": float(-vv[k])}
 
     # --- descenso con autogiro ---
+    # Principal: mediana de la velocidad sin los primeros DESC_EXCLUIR_S s de DESCENSO.
     if fin and t_toque is not None and t_toque > fin["t"]:
-        m = (d.t >= fin["t"]) & (d.t < t_toque) & np.isfinite(vz)
+        lo, hi = BANDA_DESCENSO
+        dentro = lambda x: bool(lo <= x <= hi)  # noqa: E731
+        m_all = (d.t >= fin["t"]) & (d.t < t_toque) & np.isfinite(vz)
+        m = m_all & (d.t >= fin["t"] + DESC_EXCLUIR_S)
         vel = -vz[m]
         if len(vel) >= 3:
-            lo, hi = BANDA_DESCENSO
-            media, mediana = float(np.mean(vel)), float(np.median(vel))
+            mediana, media = float(np.median(vel)), float(np.mean(vel))
+            m5 = m_all & (d.t >= max(t_toque - DESC_ULTIMOS_S, fin["t"] + DESC_EXCLUIR_S))
+            v5 = -vz[m5]
+            ult = float(np.mean(v5)) if len(v5) else None
             dh = (fin["altura_m"] - suelo) if fin["altura_m"] is not None else None
             r["descenso"] = {
-                "media_ms": media, "mediana_ms": mediana, "n": int(len(vel)),
+                "mediana_ms": mediana, "media_ms": media, "ultimos5_ms": ult,
+                "n": int(len(vel)), "excluye_s": DESC_EXCLUIR_S,
                 "min_ms": float(vel.min()), "max_ms": float(vel.max()),
                 "pct_en_banda": 100.0 * float(np.mean((vel >= lo) & (vel <= hi))),
                 "media_altura_tiempo_ms": (dh / (t_toque - fin["t"])) if dh is not None else None,
-                "en_banda": bool(lo <= media <= hi and lo <= mediana <= hi),
+                "en_banda": dentro(mediana), "media_en_banda": dentro(media),
+                "ultimos5_en_banda": dentro(ult) if ult is not None else None,
             }
         else:
-            r["notas"].append("Muy pocas muestras de vz en el descenso con autogiro.")
+            r["notas"].append(f"Muy pocas muestras de vz en el descenso con autogiro después "
+                              f"de excluir los primeros {DESC_EXCLUIR_S:g} s de DESCENSO.")
 
     # --- impacto ---
     if t_toque is not None:
@@ -597,8 +608,12 @@ def _dur(s) -> str:
     return f"{s:.1f} s ({int(m)} min {r:04.1f} s)" if s >= 60 else f"{s:.1f} s"
 
 
-def filas_tabla(r: dict, reloj: Reloj) -> List[Tuple[str, str]]:
-    """(concepto, valor) de la tabla principal."""
+NOTA_DESPLIEGUE = ("La altura del despliegue es la de la orden al servo (primer paquete con "
+                   "la bandera de disparo); el efecto real ocurre unos 0.5 s después.")
+
+
+def filas_tabla(r: dict, reloj: Reloj, con_log: bool = False) -> List[Tuple[str, str]]:
+    """(concepto, valor) de la tabla principal. Sin log, el impacto no se puede medir."""
     def ev(e):
         if not e:
             return "no detectada"
@@ -610,25 +625,30 @@ def filas_tabla(r: dict, reloj: Reloj) -> List[Tuple[str, str]]:
     post = r.get("post_aterrizaje")
     rs, sn = r.get("rssi"), r.get("snr")
     lo, hi = BANDA_DESCENSO
-    if d:
-        banda = ("Sí" if d["en_banda"] else "No") + f" ({d['pct_en_banda']:.0f} % de las muestras en {lo:g} a {hi:g} m/s)"
-    else:
-        banda = "—"
+    def vel(x, ok):
+        if x is None:
+            return "—"
+        return f"{x:.2f} m/s · " + ("Sí" if ok else "No") + f" ({lo:g} a {hi:g} m/s)"
+
     imp = r.get("impacto")
     at = r.get("aterrizaje")
     filas = [
         ("Duración de la misión (despegue → aterrizaje)", _dur(r.get("duracion_mision_s"))),
         ("Altura máxima", f"{_n(hm['altura_m'], 1, 'm')} a las {reloj(hm['t'])} (T+{hm['t']:.1f} s)" if hm else "—"),
         ("Liberación: hora · altura", ev(r.get("liberacion"))),
-        ("Despliegue del autogiro: hora · altura", ev(r.get("despliegue"))),
+        ("Despliegue del autogiro: hora · altura (orden al servo) *", ev(r.get("despliegue"))),
         ("Velocidad vertical máxima en caída", _n(r["vz_max_caida"]["vz_ms"], 1, "m/s") + f" (T+{r['vz_max_caida']['t']:.1f} s)" if r.get("vz_max_caida") else "—"),
-        ("Descenso con autogiro: velocidad media", _n(d["media_ms"], 2, "m/s") if d else "—"),
-        ("Descenso con autogiro: velocidad mediana", _n(d["mediana_ms"], 2, "m/s") if d else "—"),
-        (f"¿Descenso dentro de {lo:g} a {hi:g} m/s?", banda),
+        (f"Descenso con autogiro: mediana sin los primeros {DESC_EXCLUIR_S:g} s de DESCENSO (principal)",
+         vel(d["mediana_ms"], d["en_banda"]) if d else "—"),
+        (f"Descenso con autogiro: media sin los primeros {DESC_EXCLUIR_S:g} s",
+         vel(d["media_ms"], d["media_en_banda"]) if d else "—"),
+        (f"Descenso con autogiro: promedio de los últimos {DESC_ULTIMOS_S:g} s antes del aterrizaje",
+         vel(d["ultimos5_ms"], d["ultimos5_en_banda"]) if d else "—"),
         ("Tiempo de descenso con autogiro (fin del despliegue → aterrizaje)", _dur(r.get("tiempo_descenso_s"))),
         ("Tiempo desde la liberación hasta el aterrizaje", _dur(r.get("tiempo_caida_total_s"))),
         ("Aterrizaje: hora", f"{reloj(at['t'])} (T+{at['t']:.1f} s, por {at['metodo']})" if at else "no detectado"),
-        ("Impacto (aceleración máxima al aterrizar)", _n(imp["g"], 2, "g") if imp else "—"),
+        ("Impacto (aceleración máxima al aterrizar)",
+         "no medible con telemetría (usa --log)" if not con_log else (_n(imp["g"], 2, "g") if imp else "—")),
         ("Paquetes recibidos / esperados", f"{en['recibidos']} / {en['esperados']}" if en else "—"),
         ("Pérdida de paquetes", _n(en["perdida_pct"], 1, "%") + f" ({en['perdidos']} perdidos)" if en else "—"),
         ("RSSI promedio (mínimo)", f"{_n(rs['prom'], 1, 'dBm')} ({_n(rs['min'], 1)})" if rs else "—"),
@@ -646,14 +666,21 @@ def filas_log(r: dict, reloj: Reloj, desfase: float) -> List[str]:
 
     hm, d, imp = r.get("h_max"), r.get("descenso"), r.get("impacto")
     at = r.get("aterrizaje")
+    lo, hi = BANDA_DESCENSO
+
+    def vel(x, ok):
+        if x is None:
+            return "—"
+        return f"{x:.2f} m/s · " + ("Sí" if ok else "No")
+
     return [
         _dur(r.get("duracion_mision_s")),
         _n(hm["altura_m"], 1, "m") if hm else "—",
         ev(r.get("liberacion")), ev(r.get("despliegue")),
         _n(r["vz_max_caida"]["vz_ms"], 1, "m/s") if r.get("vz_max_caida") else "—",
-        _n(d["media_ms"], 2, "m/s") if d else "—",
-        _n(d["mediana_ms"], 2, "m/s") if d else "—",
-        ("Sí" if d["en_banda"] else "No") if d else "—",
+        vel(d["mediana_ms"], d["en_banda"]) if d else "—",
+        vel(d["media_ms"], d["media_en_banda"]) if d else "—",
+        vel(d["ultimos5_ms"], d["ultimos5_en_banda"]) if d else "—",
         _dur(r.get("tiempo_descenso_s")), _dur(r.get("tiempo_caida_total_s")),
         f"{reloj(at['t'] + desfase)}" if at else "no detectado",
         _n(imp["g"], 2, "g") if imp else "—",
@@ -682,9 +709,7 @@ def notas_calidad(d: Datos, r: dict) -> List[str]:
         out.append(f"Huecos de enlace de más de {HUECO_S:g} s: {hu['n']} "
                    f"(el mayor de {hu['max_s']:.1f} s, {hu['total_s']:.1f} s en total); "
                    "sombreados con rayas en las gráficas")
-    if r.get("impacto"):
-        out.append("El impacto sale de la telemetría (2 a 5 paquetes por segundo): el pico "
-                   "real puede ser mayor. El log interno (--log) lo mide mejor.")
+    out.append("* " + NOTA_DESPLIEGUE)
     return out + r.get("notas", [])
 
 
@@ -765,7 +790,11 @@ def _lineas_t(t, y, salto=None):
         return t, y
     corte = np.diff(t) > HUECO_S
     if salto is not None:
-        corte |= np.abs(np.diff(y)) > salto
+        # Saltos entre muestras válidas consecutivas (aunque haya NaN en medio): la línea
+        # no cruza la gráfica de +180° a -180°.
+        ok = np.flatnonzero(np.isfinite(y))
+        saltos = np.abs(np.diff(y[ok])) > salto
+        corte[ok[1:][saltos] - 1] = True
     idx = np.flatnonzero(corte) + 1
     return np.insert(t, idx, np.nan), np.insert(y, idx, np.nan)
 
@@ -888,9 +917,10 @@ def graficas(d: Datos, r: dict, carpeta: str, sesion: str, reloj: Reloj, dpi: in
         _anotar(ax, vm["t"], -vm["vz_ms"], f"Máx. en caída {vm['vz_ms']:.1f} m/s", 0, C2, "v", dx=-14)
     ds = r.get("descenso")
     if ds and fin and at:
-        ax.annotate(f"descenso con autogiro: media {ds['media_ms']:.2f} m/s · mediana {ds['mediana_ms']:.2f} m/s",
-                    ((fin["t"] + at["t"]) / 2, -hi), xytext=(0, -16), textcoords="offset points",
-                    ha="center", va="top", fontsize=8.5, color=TINTA, zorder=7,
+        ax.annotate(f"descenso con autogiro (sin los primeros {DESC_EXCLUIR_S:g} s):\n"
+                    f"mediana {ds['mediana_ms']:.2f} m/s · media {ds['media_ms']:.2f} m/s",
+                    (fin["t"], -hi), xytext=(4, -16), textcoords="offset points",
+                    ha="left", va="top", fontsize=8.5, color=TINTA, zorder=7,
                     bbox=dict(boxstyle="round,pad=0.25", fc="white", ec="#d5d4cf", lw=0.6))
     from matplotlib.patches import Patch
     guardar(fig, ARCHIVOS_PNG[1], [Line2D([], [], color=C2, lw=2, label="vz (estación)"),
@@ -1134,7 +1164,7 @@ def _html(titulo, sub, cab, filas, eventos, notas, imgs, extra_log) -> str:
 <meta name="viewport" content="width=device-width,initial-scale=1"><style>{HTML_CSS}</style></head>
 <body><main>
 <header>{logo}<div><h1>{e(EQUIPO.upper())} — Reporte de vuelo</h1><p>{e(sub)}</p></div></header>
-<h2>Resumen</h2>{''.join(t)}
+<h2>Resumen</h2>{''.join(t)}<p style="font-size:13px;color:#52514e">* {e(NOTA_DESPLIEGUE)}</p>
 <h2>Eventos</h2>{''.join(ev)}
 {extra_log}
 <h2>Calidad de los datos</h2><ul>{''.join(f'<li>{e(n)}</li>' for n in notas) or '<li>Sin observaciones.</li>'}</ul>
@@ -1199,7 +1229,7 @@ def generar_reporte(csv_path: str, log_path: Optional[str] = None,
                                "despegue o después del aterrizaje.")
 
     imgs = graficas(d, r, carpeta, sesion, reloj, dpi, log, desfase, log_nr)
-    filas = filas_tabla(r, reloj)
+    filas = filas_tabla(r, reloj, con_log=log_r is not None)
     cab = ["Concepto", "Estación terrena"]
     if log_r is not None:
         cab.append("Log interno")
@@ -1219,7 +1249,7 @@ def generar_reporte(csv_path: str, log_path: Optional[str] = None,
             "Calidad del enlace (RSSI, SNR y paquetes perdidos)"]
 
     md = [f"# {EQUIPO} — Reporte de vuelo", "", sub, "", "## Resumen", "",
-          _md_tabla(cab, filas_t), "", "## Eventos", "",
+          _md_tabla(cab, filas_t), "", f"\\* {NOTA_DESPLIEGUE}", "", "## Eventos", "",
           _md_tabla(["Evento", "Hora (PC)", "T+ (s)", "Altura"], eventos) if eventos else "Sin eventos de vuelo.",
           ""]
     if log_txt:
@@ -1256,19 +1286,20 @@ def _limpio(x):
     return x
 
 
-def abrir_carpeta(path: str) -> bool:
-    """Abre la carpeta en el explorador de archivos. False si no se pudo."""
+def abrir_carpeta(path: str) -> Tuple[bool, str]:
+    """Abre la carpeta en el explorador: os.startfile (Windows), open (macOS) o xdg-open
+    (Linux). Devuelve (ok, mensaje); nunca lanza excepciones."""
     try:
         if sys.platform.startswith("win"):
             os.startfile(path)  # type: ignore[attr-defined]
-        elif sys.platform == "darwin":
-            subprocess.Popen(["open", path])
-        else:
-            subprocess.Popen(["xdg-open", path], stdout=subprocess.DEVNULL,
-                             stderr=subprocess.DEVNULL)
-        return True
-    except (OSError, AttributeError):
-        return False
+            return True, ""
+        cmd = ["open" if sys.platform == "darwin" else "xdg-open", path]
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        if res.returncode != 0:
+            return False, f"{cmd[0]} falló ({res.returncode}): {res.stderr.strip()[:200]}"
+        return True, ""
+    except Exception as e:  # noqa: BLE001  (sin explorador, sin entorno gráfico, etc.)
+        return False, f"no se pudo abrir la carpeta ({type(e).__name__}: {e})"
 
 
 def main(argv=None) -> int:
@@ -1301,11 +1332,13 @@ def main(argv=None) -> int:
         return 2
     reloj = Reloj(cargar(path))
     print(f"Sesión: {path}")
-    for k, v in filas_tabla(r, reloj):
+    for k, v in filas_tabla(r, reloj, con_log=bool(a.log)):
         print(f"  {k:66} {v}")
     print(f"Reporte en: {carpeta}")
     if a.abrir:
-        abrir_carpeta(carpeta)
+        ok, msg = abrir_carpeta(carpeta)
+        if not ok:
+            print(f"AVISO: {msg}. Abre a mano: {carpeta}", file=sys.stderr)
     if a.json:
         print(json.dumps({"carpeta": carpeta,
                           "archivos": sorted(os.listdir(carpeta))}, ensure_ascii=False))

@@ -64,7 +64,15 @@ Gráficas PNG (200 dpi, fases sombreadas por estado) de altura, velocidad vertic
 de 8 a 12 m/s en el descenso), presión y temperatura, aceleración, actitud y enlace, más
 la tabla de números en `reporte.md` y `reporte.html` (un solo archivo, con las imágenes
 adentro) y `resumen.json`. Se guarda en `reporte_<fecha de la sesión>/`, junto al CSV.
-Desde PowerShell, en la raíz del repositorio:
+Linux o macOS (bash, en la raíz del repositorio):
+```bash
+.venv/bin/python tools/reporte_vuelo.py                                  # sesión más reciente
+.venv/bin/python tools/reporte_vuelo.py ground/data/sesion_20261119_172700.csv --pdf --abrir
+.venv/bin/python tools/reporte_vuelo.py ground/data/sesion_20261119_172700.csv --log vuelo_dump.txt
+```
+`--abrir` y el botón abren la carpeta con `xdg-open` (Linux), `open` (macOS) o
+`os.startfile` (Windows); si no se puede, el reporte se genera igual y se avisa (consola,
+ventana y registro de eventos). Desde PowerShell (Windows), en la raíz del repositorio:
 ```powershell
 # Sesión más reciente de ground\data (la última que tenga paquetes)
 .\.venv\Scripts\python tools\reporte_vuelo.py
@@ -79,7 +87,10 @@ Desde PowerShell, en la raíz del repositorio:
 las líneas `LOG_INICIO`/`LOG_FIN`) o un CSV con las columnas del paquete (`t_ms`,
 `altura_m`, ...). Otras opciones: `--salida CARPETA` (dónde crear `reporte_<fecha>/`),
 `--dpi 300`. Al terminar imprime la tabla en la consola. Criterios de cada número (qué es
-"aterrizaje", qué muestras entran en la velocidad de descenso, etc.):
+"aterrizaje", etc.). La velocidad de descenso principal es la **mediana sin los primeros
+2 s de DESCENSO**; se muestran también la media sin ese tramo y el promedio de los últimos
+5 s antes del aterrizaje, cada una con su Sí/No de 8 a 12 m/s. El impacto sin `--log` sale
+como "no medible con telemetría (usa --log)":
 `docs/PREGUNTAS.md` P50 a P56.
 
 ## API REST
