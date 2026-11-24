@@ -5,3 +5,4 @@ __pycache__/
 ground/data/
 *.log
 sim_csv/
+ambiente.sh
