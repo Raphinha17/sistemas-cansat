@@ -27,6 +27,8 @@ void FlightCore::reset(uint32_t t_ms, bool imu_present, bool baro_present) {
   acc_mag_ = 1;
   t_ms_ = t_ms;
   recovered_ = att_init_pending_ = false;
+  p0_paused_ = false;
+  t_p0_quiet_ = t_ms;
 }
 
 void FlightCore::begin(uint32_t t_ms, bool imu_present, bool baro_present) {
@@ -116,7 +118,15 @@ void FlightCore::step(const CoreInput &in) {
         baro_dead_ = true;
       }
       if (!baro_dead_) {
-        base_.add(in.p_pa);  // no cambia p0 si está congelado
+        // En TIERRA el promedio de p0 solo recibe muestras con el CanSat quieto en el suelo
+        // (SM_P0_PAUSA_MAX_S). Con p0 congelado (ASCENSO en adelante) add() no hace nada.
+        const bool quiet = !kf_init_ || sm_.state() != ST_TIERRA ||
+                           (fabsf(kf_.vz()) < SM_P0_QUIETO_VZ_MS &&
+                            fabsf(kf_.h()) < SM_P0_QUIETO_H_M);
+        if (quiet) t_p0_quiet_ = in.t_ms;
+        p0_paused_ = !quiet && (uint32_t)(in.t_ms - t_p0_quiet_) <
+                                   (uint32_t)(SM_P0_PAUSA_MAX_S * 1000.0f);
+        if (!p0_paused_) base_.add(in.p_pa);
         const float h_baro = baroAltitude(in.p_pa, base_.p0());
         if (!kf_init_) {
           kf_.reset(h_baro, 0.0f);

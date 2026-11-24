@@ -332,16 +332,20 @@ static LinkRun runLink(const std::vector<std::string> &lines, bool lossy) {
 
 struct Summary {
   std::string states;
-  float t_rel = -1, t_fire = -1, h_fire = 0, vz_fire = 0, h_max = 0;
+  float t_rel = -1, t_fire = -1, h_fire = 0, vz_fire = 0, h_max = 0, t_land = -1;
+  float t_asc = -1;
   uint8_t flags = 0;
+  int attempts = 0, lowg = 0;
+  bool confirmed = false;
   float deploy() const { return h_fire - fabsf(vz_fire) * SM_T_LATENCIA_S; }
 };
 
 // Como controlTask en modo simulación: un ciclo por línea, baro en 1 de cada 4.
-static Summary runCore(const std::vector<CoreInput> &v, const char *tag) {
+static Summary runCore(const std::vector<CoreInput> &v, const char *tag,
+                       DeployMode mode = DEPLOY_MODE_A) {
   Summary S;
   FlightCore core;
-  core.setDeployMode(DEPLOY_MODE_A);
+  core.setDeployMode(mode);
   core.begin(v.front().t_ms, true, true);
   int last = -1;
   uint32_t cycle = 0;
@@ -353,6 +357,8 @@ static Summary runCore(const std::vector<CoreInput> &v, const char *tag) {
       last = core.state();
       S.states += char('0' + last);
       if (last == ST_CAIDA) S.t_rel = in.t_ms * 0.001f;
+      if (last == ST_ASCENSO) S.t_asc = in.t_ms * 0.001f;
+      if (last == ST_ATERRIZADO) S.t_land = in.t_ms * 0.001f;
     }
     if (core.evFire() && S.t_fire < 0) {
       S.t_fire = in.t_ms * 0.001f;
@@ -362,6 +368,9 @@ static Summary runCore(const std::vector<CoreInput> &v, const char *tag) {
   }
   S.h_max = core.sm().out().h_max;
   S.flags = core.flags();
+  S.attempts = core.sm().out().servo_intentos;
+  S.confirmed = core.sm().out().servo_confirmado;
+  S.lowg = core.sm().out().lowg_descartadas;
   char msg[220];
   snprintf(msg, sizeof msg,
            "%s: lineas=%u estados=%s liberacion=%.2f disparo=%.2f h=%.1f vz=%.1f "
@@ -471,6 +480,68 @@ static void test_huecos_sin_lineas_pegadas() {
   TEST_MESSAGE(msg);
 }
 
+// Los vuelos de docs/PRUEBAS_SISTEMAS.md con el mismo texto que manda sim_serial.py (con
+// CRC, sin pérdidas): de aquí salen los números esperados de la guía.
+static Summary guia(const char *csv, const char *prueba, DeployMode mode) {
+  const std::vector<SimRow> rows = loadSim(csv);
+  TEST_ASSERT_TRUE_MESSAGE(rows.size() > 5000, "no se pudo leer el CSV del simulador");
+  std::vector<CoreInput> v;
+  for (const SimRow &r : rows) {
+    CoreInput in;
+    TEST_ASSERT_TRUE(parseSimLine(fmtRow(r, true).c_str(), in));
+    v.push_back(in);
+  }
+  const Summary S = runCore(v, prueba, mode);
+  char msg[300];
+  snprintf(msg, sizeof msg,
+           "GUIA %s (%s, modo %c): lineas=%u duracion=%.1f s ASCENSO=%.2f CAIDA=%.2f "
+           "DISPARO=%.2f (h=%.1f vz=%.1f h_despliegue=%.1f) lib->disp=%.2f s ATERRIZADO=%.2f "
+           "h_max=%.1f banderas=0x%02X intentos=%d confirmado=%d descartadas=%d",
+           prueba, csv, deployModeChar(mode), (unsigned)rows.size(), rows.back().t, S.t_asc,
+           S.t_rel, S.t_fire, S.h_fire, S.vz_fire, S.deploy(), S.t_fire - S.t_rel, S.t_land,
+           S.h_max, S.flags, S.attempts, (int)S.confirmed, S.lowg);
+  TEST_MESSAGE(msg);
+  return S;
+}
+
+static void test_guia_pruebas_sistemas() {
+  const Summary b = guia("mode_b_seed1", "(b) B nominal", DEPLOY_MODE_B);
+  TEST_ASSERT_EQUAL_STRING("0123456", b.states.c_str());
+  TEST_ASSERT_FLOAT_WITHIN(3.0f, 80.0f, b.deploy());
+  TEST_ASSERT_EQUAL_HEX8(0x17, b.flags);
+  const float alts[] = {90, 95, 105};
+  const char *csvs[] = {"mode_b_90", "mode_b_95", "mode_b_105"};
+  for (int k = 0; k < 3; k++) {
+    char tag[40];
+    snprintf(tag, sizeof tag, "(b2) B suelta %.0f m", alts[k]);
+    const Summary x = guia(csvs[k], tag, DEPLOY_MODE_B);
+    TEST_ASSERT_EQUAL_STRING("0123456", x.states.c_str());
+    TEST_ASSERT_FLOAT_WITHIN(3.0f, 80.0f, x.deploy());
+    TEST_ASSERT_EQUAL_HEX8(0x17, x.flags);
+  }
+  const Summary ti = guia("mode_b_tilt", "(b3) B caida inclinada", DEPLOY_MODE_B);
+  TEST_ASSERT_EQUAL_HEX8(0x1F, ti.flags);
+  const Summary lo = guia("mode_b_slow", "(b4) B ascenso lento", DEPLOY_MODE_B);
+  TEST_ASSERT_EQUAL_STRING("0123456", lo.states.c_str());
+  TEST_ASSERT_FLOAT_WITHIN(3.0f, 80.0f, lo.deploy());
+  const Summary a = guia("flight_seed1", "(c) A nominal", DEPLOY_MODE_A);
+  TEST_ASSERT_FLOAT_WITHIN(3.0f, 200.0f, a.deploy());
+  TEST_ASSERT_EQUAL_HEX8(0x17, a.flags);
+  const Summary ab = guia("mode_b_seed1", "(c) contraprueba: vuelo B en modo A", DEPLOY_MODE_A);
+  TEST_ASSERT_EQUAL_STRING("012", ab.states.c_str());
+  const Summary c = guia("tinaco", "(d) C tinaco", DEPLOY_MODE_C);
+  TEST_ASSERT_EQUAL_STRING("013456", c.states.c_str());
+  const Summary e = guia("mode_b_false_hover", "(e) B falsa liberacion", DEPLOY_MODE_B);
+  TEST_ASSERT_EQUAL(1, e.lowg);
+  TEST_ASSERT_FLOAT_WITHIN(3.0f, 80.0f, e.deploy());
+  const Summary f = guia("mode_b_fail_baro", "(f) B falla baro", DEPLOY_MODE_B);
+  TEST_ASSERT_FLOAT_WITHIN(0.02f, DEPLOY_T_SIN_BARO_B_S, f.t_fire - f.t_rel);
+  TEST_ASSERT_EQUAL_HEX8(0x3F, f.flags);
+  const Summary g = guia("mode_b_fail_imu", "(g) B falla IMU", DEPLOY_MODE_B);
+  TEST_ASSERT_FLOAT_WITHIN(3.0f, 80.0f, g.deploy());
+  TEST_ASSERT_EQUAL_HEX8(0x57, g.flags);
+}
+
 int main(int, char **) {
   UNITY_BEGIN();
   RUN_TEST(test_crc_vector);
@@ -481,5 +552,6 @@ int main(int, char **) {
   RUN_TEST(test_vuelo_con_perdidas_crc_y_reenvio);
   RUN_TEST(test_vuelo_con_perdidas_sin_crc);
   RUN_TEST(test_huecos_sin_lineas_pegadas);
+  RUN_TEST(test_guia_pruebas_sistemas);
   return UNITY_END();
 }

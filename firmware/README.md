@@ -4,7 +4,8 @@ PlatformIO, placa `heltec_wifi_lora_32_V3` (ESP32-S3 + SX1262), framework Arduin
 Fuente de verdad: `docs/SPEC.md`. Dudas y suposiciones: `docs/PREGUNTAS.md`.
 
 Etapa actual: sensores, filtros, telemetría, log, **máquina de estados (0 a 6)**, servo de
-liberación, NVS (reinicio en vuelo), **modos de despliegue A/B/C**, modo simulación por
+liberación, NVS (reinicio en vuelo), **modos de despliegue B (lanzamiento real, por
+defecto)/A/C**, modo simulación por
 serial y modo `DEMO_SEPARACION` (armado por serial o botón PRG). Procedimiento para el
 video de aceptación: `docs/PRUEBA_VIDEO.md`.
 
@@ -20,7 +21,9 @@ arranca y entra sola a AUTOPRUEBA -> TIERRA (sin armado); no hay reed ni enclava
 | `rx_station` | receptor de la estación terrena | `pio run -e rx_station -t upload` |
 | `native` | pruebas en PC | `pio test -e native` |
 
-En Windows, `pio` está en el `.venv` del proyecto: `..\.venv\Scripts\pio.exe`.
+`pio` está en el `.venv` del proyecto: en Linux `../.venv/bin/pio` (o `source
+../.venv/bin/activate` y luego `pio`), en Windows `..\.venv\Scripts\pio.exe`. Puertos: Linux
+`/dev/ttyUSB0`, `/dev/ttyUSB1`... (`--upload-port /dev/ttyUSB1`); Windows `COM5`, `COM6`...
 El entorno `native` usa `g++` si existe; si no, el compilador de `zig` (`pip install ziglang`
 en el `.venv`). Las pruebas generan sus datos con `tools/flight_sim.py --raw-csv`.
 
@@ -74,15 +77,22 @@ scripts/     scripts de PlatformIO
 | 6 ATERRIZADO | 2 Hz 60 s, luego cada 5 s | 1 Hz | sin energía |
 
 ## Modos de despliegue
-| Modo | Liberación válida | Disparo | Respaldos |
-|---|---|---|---|
-| **A** (por defecto, concurso) | h > 240 m (~450 m) | h ≤ 200 + \|vz\|·0.5 y compuerta 45° | 1.5 s, 160 m; sin baro 7 s |
-| **B** | h > 90 m (~100 m) | h ≤ 50 + \|vz\|·0.5 y compuerta 45° | 1.5 s, 40 m; sin baro 1.5 s |
-| **C** (tinaco) | caída libre 150 ms, sin altura (también en TIERRA) | inmediato, sin compuerta | — |
+| Modo | Liberación válida | Detector | Disparo | Respaldos |
+|---|---|---|---|---|
+| **B** (por defecto, lanzamiento real: suelta ~100 m) | h > 85 m | baja g 100 ms + vz < -5 m/s en 0.6 s; o vz < -8 m/s 0.2 s; o 8 m bajo h_max bajando a > 5 m/s | h ≤ 80 + \|vz\|·0.5 y compuerta 45°; inmediato si la liberación llega tarde | compuerta 0.3 s, 70 m; sin baro 1.0 s |
+| **A** (reglamento anterior) | h > 240 m (~450 m) | baja g 150 ms + vz < -8 m/s en 1 s; o vz < -12 m/s 0.4 s; o 25 m bajo h_max | h ≤ 200 + \|vz\|·0.5 y compuerta 45° | compuerta 1.5 s, 160 m; sin baro 7 s |
+| **C** (tinaco) | caída libre 150 ms, sin altura (también en TIERRA) | — | inmediato, sin compuerta | — |
 
 `MODO A|B|C` lo cambia (solo en estados 0 y 1), se guarda en NVS y queda en el log
-(registro de evento en cada arranque y cambio). `MODO` y `STAT` muestran el actual.
-Parámetros en `config.h` (`DEPLOY_*`); dudas en `docs/PREGUNTAS.md` P31-P33.
+(registro de evento en cada arranque y cambio). `MODO`, `STAT` y el arranque muestran el
+modo activo y sus umbrales; el arranque avisa (`# AVISO: modo A activo...`) si el modo
+guardado no es el B. **Una placa que ya tenía `MODO A` guardado sigue en A hasta mandar
+`MODO B`.** Parámetros en `config.h` (`DEPLOY_*`); dudas en `docs/PREGUNTAS.md` P31-P33 y
+P57-P59.
+
+p0 en TIERRA: el promedio móvil solo toma muestras con el CanSat quieto en el suelo
+(|h| < 3 m y |vz| < 0.5 m/s); al levantarlo se pausa (hasta 300 s) para que un ascenso
+lento de dron no lo arrastre (`STAT`: `p0_pausa=1`). P57.
 
 ## Comandos serial (115200)
 `TX1` (según el estado, por defecto), `TX5` (5 Hz en tierra, pruebas), `STAT`, `DUMP`

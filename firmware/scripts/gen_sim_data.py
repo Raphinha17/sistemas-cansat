@@ -14,19 +14,32 @@ os.makedirs(out_dir, exist_ok=True)
 # (nombre, argumentos extra del simulador). Los escenarios de la máquina de estados
 # usan las opciones de flight_sim.py descritas en su encabezado.
 CASES = [
-    ("flight_seed1", ["--seed", "1"]),
-    ("flight_seed7", ["--seed", "7"]),
-    ("fail_baro", ["--seed", "1", "--fail", "baro", "--fail-at", "40"]),
-    ("fail_imu", ["--seed", "1", "--fail", "imu", "--fail-at", "40"]),
-    ("false_release", ["--seed", "1", "--false-release", "70"]),
-    ("low_release", ["--seed", "1", "--release-alt", "200"]),
-    ("gate_delay", ["--seed", "1", "--fall-tilt", "60", "--fall-tilt-until-h", "214"]),
-    ("tilt_backup", ["--seed", "1", "--fall-tilt", "70"]),
-    ("fast_fall", ["--seed", "1", "--fall-tilt", "70", "--v-terminal", "60"]),
-    # Modos de despliegue B (100 m -> 50 m) y C (tinaco, 8 m)
+    # Modo A (450 m -> 200 m, reglamento anterior)
+    ("flight_seed1", ["--seed", "1", "--mode", "A"]),
+    ("flight_seed7", ["--seed", "7", "--mode", "A"]),
+    ("fail_baro", ["--seed", "1", "--mode", "A", "--fail", "baro", "--fail-at", "40"]),
+    ("fail_imu", ["--seed", "1", "--mode", "A", "--fail", "imu", "--fail-at", "40"]),
+    ("false_release", ["--seed", "1", "--mode", "A", "--false-release", "70"]),
+    ("low_release", ["--seed", "1", "--mode", "A", "--release-alt", "200"]),
+    ("gate_delay", ["--seed", "1", "--mode", "A", "--fall-tilt", "60", "--fall-tilt-until-h", "214"]),
+    ("tilt_backup", ["--seed", "1", "--mode", "A", "--fall-tilt", "70"]),
+    ("fast_fall", ["--seed", "1", "--mode", "A", "--fall-tilt", "70", "--v-terminal", "60"]),
+    # Modo B (lanzamiento real: ascenso de dron a 3 m/s, 20 s estacionado a 100 m, suelta,
+    # autogiro a 80 m)
     ("mode_b_seed1", ["--seed", "1", "--mode", "B"]),
     ("mode_b_seed7", ["--seed", "7", "--mode", "B"]),
+    ("mode_b_95", ["--seed", "1", "--mode", "B", "--release-alt", "95"]),
+    ("mode_b_90", ["--seed", "1", "--mode", "B", "--release-alt", "90"]),
+    ("mode_b_105", ["--seed", "1", "--mode", "B", "--release-alt", "105"]),
     ("mode_b_low", ["--seed", "1", "--mode", "B", "--release-alt", "80"]),
+    ("mode_b_tilt", ["--seed", "1", "--mode", "B", "--fall-tilt", "70"]),
+    ("mode_b_false_hover", ["--seed", "1", "--mode", "B", "--false-release", "70"]),
+    ("mode_b_false_climb", ["--seed", "1", "--mode", "B", "--false-release", "40"]),
+    ("mode_b_slow", ["--seed", "1", "--mode", "B", "--v-climb", "1.5", "--t-hover", "120",
+                     "--vib", "0.3"]),
+    ("mode_b_fail_baro", ["--seed", "1", "--mode", "B", "--fail", "baro", "--fail-at", "45"]),
+    ("mode_b_fail_imu", ["--seed", "1", "--mode", "B", "--fail", "imu", "--fail-at", "45"]),
+    # Modo C (tinaco, 8 m)
     ("tinaco", ["--seed", "1", "--mode", "C"]),
 ]
 
@@ -36,7 +49,8 @@ for name, extra in CASES:
     args_txt = " ".join(extra)
     old_args = open(args_file).read() if os.path.exists(args_file) else None
     # Se regenera si falta, si el simulador cambió después de generarlo o si cambiaron
-    # los argumentos del caso.
+    # los argumentos del caso. (Las mismas órdenes generan los CSV de
+    # docs/PRUEBAS_SISTEMAS.md: allí y aquí deben coincidir.)
     if (not os.path.exists(out) or os.path.getmtime(out) < os.path.getmtime(sim)
             or old_args != args_txt):
         print("gen_sim_data: generando", out)

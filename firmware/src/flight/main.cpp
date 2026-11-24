@@ -18,7 +18,8 @@
 //    segundos después. Otro toque largo durante la cuenta cancela. LED de la placa:
 //    parpadeo rápido durante la cuenta, fijo tras el disparo. El modo de vuelo no cambia
 //    y no usa el botón ni el LED.
-//  - Modo de despliegue A, B o C (comando MODO, guardado en NVS; ver config.h).
+//  - Modo de despliegue B (lanzamiento real, por defecto), A o C (comando MODO, guardado en
+//    NVS; ver config.h). STAT y el arranque muestran el modo activo y sus umbrales.
 //
 // Encendido: interruptor deslizable en la línea de la pila; al encender, la placa
 // arranca y entra sola a AUTOPRUEBA -> TIERRA (sin armado).
@@ -79,7 +80,9 @@ static volatile uint32_t pub_t_ms = 0;                  // reloj del último cic
 static volatile float pub_h = 0, pub_vz = 0, pub_hmax = 0, pub_tilt = 0, pub_demo_rest = 0;
 static volatile uint8_t pub_servo_int = 0;
 static volatile bool pub_servo_conf = false, pub_servo_on = false, pub_vz_fuera = false;
-static volatile uint8_t pub_mode = DEPLOY_MODE_A;  // modo de despliegue aplicado
+static volatile bool pub_p0_pausa = false;          // promedio de p0 en pausa (TIERRA)
+static volatile float pub_p0 = 0;
+static volatile uint8_t pub_mode = DEPLOY_MODE_B;  // modo de despliegue aplicado (setup)
 static volatile uint8_t pub_demo = 0;              // 0 sin armar, 1 cuenta, 2 disparado
 
 // Estadísticas (escritas por control, leídas por comms solo para diagnóstico)
@@ -263,6 +266,8 @@ static void controlTask(void *) {
     pub_servo_conf = so.servo_confirmado;
     pub_vz_fuera = so.vz_fuera_rango;
     pub_lowg = so.lowg_descartadas;
+    pub_p0_pausa = core.p0Paused();
+    pub_p0 = core.base().p0();
     pub_demo_rest = core.demo().remainingS(in.t_ms);
     pub_demo = core.demo().counting() ? 1 : core.demo().fired() ? 2 : 0;
 
@@ -283,16 +288,27 @@ static void printRecord(const MissionRecord &r) {
                 r.gyro_bias[1], r.gyro_bias[2]);
 }
 
+// Modo activo y sus umbrales (STAT, MODO y arranque). Dos líneas en A y B.
 static void printMode(DeployMode m) {
   const DeployParams p = deployParams(m);
-  if (p.immediate)
-    Serial.printf("despliegue=%c (tinaco: disparo al detectar la caida libre, sin altura "
-                  "minima ni compuerta)\n",
-                  deployModeChar(m));
-  else
-    Serial.printf("despliegue=%c (liberacion valida > %.0f m, autogiro a %.0f m, "
-                  "respaldo %.0f m)\n",
-                  deployModeChar(m), p.release_min_m, p.deploy_alt_m, p.backup_alt_m);
+  if (p.immediate) {
+    Serial.printf("despliegue=%c [%s] disparo al detectar la caida libre (baja g %.0f ms), "
+                  "sin altura minima ni compuerta\n",
+                  deployModeChar(m), p.name, p.lowg_t_s * 1000);
+    return;
+  }
+  Serial.printf("despliegue=%c [%s] liberacion valida > %.0f m, autogiro a %.0f m "
+                "(h_disp = %.0f + |vz|*%.1f), respaldo %.0f m, compuerta %.0f grados max "
+                "%.1f s\n",
+                deployModeChar(m), p.name, p.release_min_m, p.deploy_alt_m, p.deploy_alt_m,
+                SM_T_LATENCIA_S, p.backup_alt_m, SM_COMPUERTA_DEG, p.gate_backup_s);
+  Serial.printf("  deteccion: baja g %.0f ms + vz < %.0f m/s en %.1f s | vz < %.0f m/s %.1f s "
+                "| %.0f m bajo h_max",
+                p.lowg_t_s * 1000, p.confirm_vz_ms, p.confirm_t_s, p.fast_vz_ms, p.fast_t_s,
+                p.drop_from_max_m);
+  if (p.drop_vz_ms < 1e3f) Serial.printf(" con vz < %.0f m/s", p.drop_vz_ms);
+  Serial.printf(" | sin baro: disparo %.1f s tras liberar%s\n", p.t_fire_no_baro_s,
+                p.late_fire_now ? " | liberacion tardia: disparo inmediato" : "");
 }
 
 static void sendResendRequest() {
@@ -342,9 +358,10 @@ static bool handleCommand(const String &cmd) {
                   pub_servo_on ? "ON" : "OFF", pub_servo_int, pub_servo_conf,
                   (unsigned long)pub_fire_count, (unsigned long)pub_fire_ms, pub_vz_fuera);
     Serial.printf("liberaciones_descartadas=%u disparo_h=%.1f disparo_vz=%.1f "
-                  "h_despliegue=%.1f\n",
+                  "h_despliegue=%.1f p0=%.1f Pa p0_pausa=%u\n",
                   pub_lowg, pub_fire_h, pub_fire_vz,
-                  pub_fire_h - fabsf(pub_fire_vz) * SM_T_LATENCIA_S);
+                  pub_fire_h - fabsf(pub_fire_vz) * SM_T_LATENCIA_S, pub_p0,
+                  pub_p0_pausa ? 1u : 0u);
     Serial.printf("ciclos=%lu sobretiempos=%lu max_us=%lu imu_err=%lu baro_err=%lu\n",
                   (unsigned long)st_cycles, (unsigned long)st_overruns,
                   (unsigned long)st_max_us, (unsigned long)st_imu_err,
@@ -620,6 +637,10 @@ void setup() {
   pub_mode = mode;
   Serial.print(mode_saved ? "Modo guardado: " : "Modo por defecto: ");
   printMode(mode);
+  if (mode != deployModeDefault())
+    Serial.printf("# AVISO: modo %c activo; el lanzamiento real es el modo %c (manda MODO %c)\n",
+                  deployModeChar(mode), deployModeChar(deployModeDefault()),
+                  deployModeChar(deployModeDefault()));
   logger::appendEvent(LOG_EV_ARRANQUE, (uint8_t)deployModeChar(mode), millis());
 
   // Reinicio en vuelo: si hay una misión en curso en NVS, se recupera sin recalibrar.

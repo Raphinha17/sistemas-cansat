@@ -117,13 +117,59 @@ def _states(pk):
 
 
 def test_modo_b():
+    # Lanzamiento real: ascenso a 3 m/s, 20 s estacionado a 100 m (±0.5 m), suelta y
+    # autogiro a 80 m (h_disp = 80 + |vz| * 0.5 ~ 88 m).
     rows = []
     pk = [p for _, p in S.simulate(seed=1, raw_cb=rows.append, **S.MODES["B"])]
-    assert max(r[10] for r in rows) == pytest.approx(100, abs=0.5)
+    assert max(r[10] for r in rows) == pytest.approx(100, abs=0.6)
     assert _states(pk) == list(range(7))
+    hover = [r for r in rows if r[15] == "hover"]
+    assert hover[-1][0] - hover[0][0] == pytest.approx(20.0, abs=0.05)
+    assert all(abs(r[10] - 100) < 0.7 for r in hover)
+    asc = [r[11] for r in rows if r[15] == "ascent"]
+    assert max(asc) == pytest.approx(3.0, abs=0.01)
     fire = next(p for p in pk if p.estado == T.DESPLIEGUE)
-    assert 50 <= fire.altura_m <= 70           # h_disp = 50 + |vz| * 0.5
+    assert 80 <= fire.altura_m <= 92
     assert not pk[-1].banderas & T.F_DISPARO_RESPALDO
+
+
+def test_modo_b_por_defecto_en_cli(tmp_path):
+    import csv
+    out = tmp_path / "b.csv"
+    assert S.main(["--raw-csv", str(out), "--seed", "1"]) == 0
+    rows = list(csv.DictReader(open(out)))
+    assert max(float(r["h_true"]) for r in rows) == pytest.approx(100, abs=0.6)
+
+
+@pytest.mark.parametrize("h_top", [90, 95, 105])
+def test_modo_b_otras_alturas(h_top):
+    rows = []
+    pk = [p for _, p in S.simulate(seed=1, raw_cb=rows.append, **dict(S.MODES["B"], h_top=h_top))]
+    assert max(r[10] for r in rows) == pytest.approx(h_top, abs=0.6)
+    assert _states(pk) == list(range(7))
+
+
+def test_modo_b_ascenso_lento_y_vibracion():
+    kw = dict(S.MODES["B"], v_climb=1.5, t_hover=120, vib_g=0.3)
+    rows = []
+    pk = [p for _, p in S.simulate(seed=1, raw_cb=rows.append, **kw)]
+    assert _states(pk) == list(range(7))       # la réplica (con pausa de p0) también despega
+    asc = [r for r in rows if r[15] == "ascent"]
+    assert max(r[11] for r in asc) == pytest.approx(1.5, abs=0.01)
+    az = [r[3] for r in asc[200:]]
+    m = sum(az) / len(az)
+    sd = (sum((x - m) ** 2 for x in az) / len(az)) ** 0.5
+    assert 0.25 < sd < 0.35
+
+
+def test_modo_b_falsa_liberacion_estacionado():
+    rows = _raw(seed=1, false_release_at=70, **S.MODES["B"])
+    win = [r for r in rows if 70.05 <= r[0] < 70.2]
+    assert win and all(r[15] == "hover" and abs(r[3]) < 0.3 for r in win)
+    vz_min = min(r[11] for r in rows if 69 < r[0] < 72)
+    assert -3.0 < vz_min < -2.0                     # ~-0.25 s * g, y se recupera
+    hov = [r[10] for r in rows if r[15] == "hover" and r[0] > 75]
+    assert all(abs(h - 100) < 1.0 for h in hov)
 
 
 def test_modo_c_tinaco():

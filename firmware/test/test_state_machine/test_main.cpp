@@ -25,9 +25,11 @@ static SmInput base(uint32_t t) {
   return in;
 }
 
-// Sube a 6 m/s desde 30 m hasta h_top y suelta: baja g y vz cayendo durante hasta 2 s.
-// Devuelve el tiempo actual. *h_out: altura final.
-static uint32_t climbAndDrop(StateMachine &sm, float h_top, float *h_out = nullptr) {
+// Sube a 6 m/s desde 30 m hasta h_top, se queda hover_s estacionado y suelta: baja g y
+// vz cayendo (caída libre) durante hasta 2 s, hasta que deja de estar en ASCENSO.
+// Devuelve el tiempo actual. *h_out: altura final. Usa el modo que ya tenga sm.
+static uint32_t climbAndDrop(StateMachine &sm, float h_top, float *h_out = nullptr,
+                             float hover_s = 0) {
   uint32_t t = 0;
   sm.begin(t);
   for (; t < 2000; t += 10) sm.step(base(t));  // 0 -> 1
@@ -40,6 +42,11 @@ static uint32_t climbAndDrop(StateMachine &sm, float h_top, float *h_out = nullp
     sm.step(in);
   }
   TEST_ASSERT_EQUAL(ST_ASCENSO, sm.state());
+  for (int i = 0; i < (int)(hover_s * 100); i++, t += 10) {
+    SmInput in = base(t);
+    in.h = h;
+    sm.step(in);
+  }
   float vz = 0;
   for (int i = 0; i < 200 && sm.state() == ST_ASCENSO; i++, t += 10) {
     SmInput in = base(t);
@@ -54,9 +61,11 @@ static uint32_t climbAndDrop(StateMachine &sm, float h_top, float *h_out = nullp
   return t;
 }
 
-// Lleva la máquina hasta CAIDA con una liberación a 450 m. Devuelve el tiempo actual.
+// Lleva la máquina hasta CAIDA con una liberación a 450 m en el modo A (los casos con los
+// números del modo A). Devuelve el tiempo actual.
 static uint32_t toCaida(StateMachine &sm) {
   uint32_t t = 0;
+  sm.setDeployMode(DEPLOY_MODE_A);
   sm.begin(t);
   for (; t < 2000; t += 10) sm.step(base(t));  // 0 -> 1
   TEST_ASSERT_EQUAL(ST_TIERRA, sm.state());
@@ -449,8 +458,13 @@ static void test_modos_parametros() {
                      c = deployParams(DEPLOY_MODE_C);
   TEST_ASSERT_EQUAL_FLOAT(200.0f, a.deploy_alt_m);
   TEST_ASSERT_EQUAL_FLOAT(240.0f, a.release_min_m);  // DEPLOY_ALT + 40
-  TEST_ASSERT_EQUAL_FLOAT(50.0f, b.deploy_alt_m);
-  TEST_ASSERT_EQUAL_FLOAT(90.0f, b.release_min_m);
+  TEST_ASSERT_EQUAL_FLOAT(160.0f, a.backup_alt_m);
+  TEST_ASSERT_EQUAL_FLOAT(80.0f, b.deploy_alt_m);
+  TEST_ASSERT_EQUAL_FLOAT(85.0f, b.release_min_m);   // DEPLOY_ALT + 5
+  TEST_ASSERT_EQUAL_FLOAT(70.0f, b.backup_alt_m);
+  TEST_ASSERT_TRUE(b.lowg_t_s < a.lowg_t_s && b.confirm_vz_ms > a.confirm_vz_ms);
+  TEST_ASSERT_TRUE(b.gate_backup_s < a.gate_backup_s);
+  TEST_ASSERT_TRUE(b.late_fire_now && !a.late_fire_now);
   TEST_ASSERT_FALSE(a.immediate || b.immediate);
   TEST_ASSERT_TRUE(c.immediate);
   DeployMode m;
@@ -458,35 +472,90 @@ static void test_modos_parametros() {
   TEST_ASSERT_EQUAL(DEPLOY_MODE_B, m);
   TEST_ASSERT_EQUAL('C', deployModeChar(DEPLOY_MODE_C));
   TEST_ASSERT_FALSE(deployModeFromChar('D', m));
-  TEST_ASSERT_EQUAL(DEPLOY_MODE_A, deployModeDefault());
+  TEST_ASSERT_EQUAL(DEPLOY_MODE_B, deployModeDefault());  // lanzamiento real por defecto
   // El modo es configuración: sobrevive a begin() y a beginRecovered()
   StateMachine sm;
-  TEST_ASSERT_EQUAL(DEPLOY_MODE_A, sm.deployMode());
-  sm.setDeployMode(DEPLOY_MODE_B);
-  sm.begin(0);
   TEST_ASSERT_EQUAL(DEPLOY_MODE_B, sm.deployMode());
+  sm.setDeployMode(DEPLOY_MODE_A);
+  sm.begin(0);
+  TEST_ASSERT_EQUAL(DEPLOY_MODE_A, sm.deployMode());
+  TEST_ASSERT_EQUAL_FLOAT(240.0f, sm.deployParamsNow().release_min_m);
   MissionRecord rec;
   rec.mission = 1;
   rec.state = ST_ASCENSO;
   sm.beginRecovered(rec, 0);
-  TEST_ASSERT_EQUAL(DEPLOY_MODE_B, sm.deployMode());
+  TEST_ASSERT_EQUAL(DEPLOY_MODE_A, sm.deployMode());
 }
 
-static void test_modo_b_altura_minima_90() {
-  // Soltado a 95 m: liberación válida en B (> 90 m) y no en A (< 240 m).
-  StateMachine b;
-  b.setDeployMode(DEPLOY_MODE_B);
-  climbAndDrop(b, 95);
-  TEST_ASSERT_EQUAL(ST_CAIDA, b.state());
+static void test_modo_b_altura_minima_85() {
+  // Sueltas a 100, 95 y 90 m: liberación válida en B (> 85 m) y no en A (< 240 m).
+  const float hs[] = {100, 95, 90};
+  for (float h_top : hs) {
+    StateMachine b;
+    b.setDeployMode(DEPLOY_MODE_B);
+    climbAndDrop(b, h_top, nullptr, 20);  // 20 s estacionado antes de soltar
+    TEST_ASSERT_EQUAL_MESSAGE(ST_CAIDA, b.state(), "suelta valida en B");
+  }
   StateMachine a;
+  a.setDeployMode(DEPLOY_MODE_A);
   climbAndDrop(a, 95);
   TEST_ASSERT_EQUAL(ST_ASCENSO, a.state());
   TEST_ASSERT_TRUE(a.out().lowg_descartadas > 0);
-  // Soltado a 85 m: en B tampoco.
+  // Soltado a 84 m: en B tampoco.
   StateMachine b2;
   b2.setDeployMode(DEPLOY_MODE_B);
-  climbAndDrop(b2, 85);
+  climbAndDrop(b2, 84);
   TEST_ASSERT_EQUAL(ST_ASCENSO, b2.state());
+}
+
+static void test_modo_b_detector_rapido() {
+  // Caída libre desde el estacionamiento (vz parte de 0): B detecta al pasar vz de -5 m/s
+  // (~0.5 s), A recién al pasar de -8 m/s (~0.8 s). Mismas alturas de B en los dos.
+  DeployParams pa = deployParams(DEPLOY_MODE_B);
+  const DeployParams da = deployParams(DEPLOY_MODE_A);
+  pa.lowg_t_s = da.lowg_t_s;
+  pa.confirm_vz_ms = da.confirm_vz_ms;
+  pa.confirm_t_s = da.confirm_t_s;
+  uint32_t t_det[2] = {0, 0};
+  for (int k = 0; k < 2; k++) {
+    StateMachine sm;
+    if (k == 0)
+      sm.setDeployParams(DEPLOY_MODE_B, pa);
+    else
+      sm.setDeployMode(DEPLOY_MODE_B);
+    climbAndDrop(sm, 100, nullptr, 5);
+    t_det[k] = sm.tRelease();
+  }
+  // climbAndDrop suelta 5 s después de llegar a 100 m; la caída empieza en el mismo ciclo
+  // para los dos, así que se compara la diferencia.
+  const float dt = (t_det[0] - t_det[1]) * 0.001f;
+  TEST_ASSERT_FLOAT_WITHIN(0.05f, (8.0f - 5.0f) / 9.8f, dt);  // ~0.31 s antes
+  // Un bache de baja g de 90 ms no arma la ventana (necesita 100 ms)
+  StateMachine c;
+  c.setDeployMode(DEPLOY_MODE_B);
+  c.begin(0);
+  uint32_t t = 0;
+  for (; t < 2000; t += 10) c.step(base(t));
+  for (float h = 30; h < 100; t += 10, h += 0.06f) {
+    SmInput in = base(t);
+    in.h = h;
+    in.vz = 6;
+    c.step(in);
+  }
+  for (int i = 0; i < 9; i++, t += 10) {
+    SmInput in = base(t);
+    in.h = 100;
+    in.vz = -9;  // aunque vz ya "confirmara", sin 100 ms de baja g no hay ventana
+    in.acc_g = 0.1f;
+    c.step(in);
+  }
+  for (int i = 0; i < 100; i++, t += 10) {
+    SmInput in = base(t);
+    in.h = 100;
+    c.step(in);
+  }
+  TEST_ASSERT_EQUAL(ST_ASCENSO, c.state());
+  TEST_ASSERT_EQUAL(0, c.out().lowg_descartadas);
 }
 
 static void test_modo_b_h_disp_y_respaldo() {
@@ -494,34 +563,235 @@ static void test_modo_b_h_disp_y_respaldo() {
   sm.setDeployMode(DEPLOY_MODE_B);
   uint32_t t = climbAndDrop(sm, 100);
   TEST_ASSERT_EQUAL(ST_CAIDA, sm.state());
-  // h_disp = 50 + |vz| * 0.5: con vz = -24, 62 m. A 62.5 m no dispara; a 61.9 sí.
+  // h_disp = 80 + |vz| * 0.5: con vz = -16, 88 m. A 88.5 m no dispara; a 87.9 sí.
   SmInput in = base(t);
-  in.h = 62.5f;
-  in.vz = -24;
+  in.h = 88.5f;
+  in.vz = -16;
   sm.step(in);
   TEST_ASSERT_EQUAL(ST_CAIDA, sm.state());
-  TEST_ASSERT_FLOAT_WITHIN(0.01f, 62.0f, sm.out().h_disp);
+  TEST_ASSERT_FLOAT_WITHIN(0.01f, 88.0f, sm.out().h_disp);
   in = base(t += 10);
-  in.h = 61.9f;
-  in.vz = -24;
+  in.h = 87.9f;
+  in.vz = -16;
   sm.step(in);
   TEST_ASSERT_EQUAL(ST_DESPLIEGUE, sm.state());
   TEST_ASSERT_EQUAL(0, sm.out().flags & FLAG_DISPARO_RESPALDO);
-  // Respaldo de altura en B: inclinado siempre, dispara en el primer ciclo bajo 40 m.
+  TEST_ASSERT_FALSE(sm.lateFire());
+  // Respaldo de altura en B: el primer ciclo de CAIDA por encima de h_disp, luego cae a
+  // 60 m/s siempre inclinado (80°): cruza h_disp (110 m) a 72 m y en 0.3 s ya pasó 70 m:
+  // dispara en el primer ciclo bajo 70 m, por respaldo.
   StateMachine r;
   r.setDeployMode(DEPLOY_MODE_B);
   t = climbAndDrop(r, 100);
-  float h = 45;
-  for (int i = 0; i < 100 && r.state() == ST_CAIDA; i++, t += 10, h -= 0.6f) {
-    in = base(t);
+  in = base(t);
+  in.h = 98;
+  in.vz = -5;
+  r.step(in);
+  TEST_ASSERT_EQUAL(ST_CAIDA, r.state());
+  float h = 72;
+  for (int i = 0; i < 100 && r.state() == ST_CAIDA; i++, h -= 0.6f) {
+    in = base(t += 10);
     in.h = h;
-    in.vz = -60;  // h_disp = 80 m: ya por debajo, la compuerta (80°) no se cumple
+    in.vz = -60;
     in.tilt_deg = 80;
     r.step(in);
   }
   TEST_ASSERT_EQUAL(ST_DESPLIEGUE, r.state());
   TEST_ASSERT_TRUE(r.out().flags & FLAG_DISPARO_RESPALDO);
   TEST_ASSERT_TRUE(h + 0.6f <= DEPLOY_RESPALDO_B_M && h + 0.6f > DEPLOY_RESPALDO_B_M - 0.7f);
+  TEST_ASSERT_TRUE(r.tFire() - r.tHdisp() < (uint32_t)(DEPLOY_B_COMPUERTA_RESPALDO_S * 1000));
+}
+
+static void test_modo_b_compuerta_0_3s() {
+  // Inclinado 60° al cruzar h_disp: en B la compuerta espera solo 0.3 s y dispara por
+  // respaldo (en A esperaría 1.5 s).
+  StateMachine sm;
+  sm.setDeployMode(DEPLOY_MODE_B);
+  uint32_t t = climbAndDrop(sm, 100);
+  float h = 95;
+  uint32_t t_cross = 0;
+  for (int i = 0; i < 200 && sm.state() == ST_CAIDA; i++, t += 10, h -= 0.17f) {
+    SmInput in = base(t);
+    in.h = h;
+    in.vz = -17;
+    in.tilt_deg = 60;
+    sm.step(in);
+    if (!t_cross && sm.tHdisp()) t_cross = t;
+  }
+  TEST_ASSERT_EQUAL(ST_DESPLIEGUE, sm.state());
+  TEST_ASSERT_EQUAL_UINT32(t_cross + (uint32_t)(DEPLOY_B_COMPUERTA_RESPALDO_S * 1000), sm.tFire());
+  TEST_ASSERT_TRUE(sm.out().flags & FLAG_DISPARO_RESPALDO);
+  // Si se endereza a los 0.2 s, dispara entonces, sin respaldo
+  StateMachine g;
+  g.setDeployMode(DEPLOY_MODE_B);
+  t = climbAndDrop(g, 100);
+  h = 95;
+  t_cross = 0;
+  for (int i = 0; i < 200 && g.state() == ST_CAIDA; i++, t += 10, h -= 0.17f) {
+    SmInput in = base(t);
+    in.h = h;
+    in.vz = -17;
+    in.tilt_deg = (t_cross && t - t_cross >= 200) ? 30 : 60;
+    g.step(in);
+    if (!t_cross && g.tHdisp()) t_cross = t;
+  }
+  TEST_ASSERT_EQUAL_UINT32(t_cross + 200, g.tFire());
+  TEST_ASSERT_EQUAL(0, g.out().flags & FLAG_DISPARO_RESPALDO);
+}
+
+static void test_modo_b_disparo_tardio() {
+  // La liberación se confirma cuando h ya está por debajo de h_disp (detección tardía):
+  // en B se dispara en el primer ciclo de CAIDA aunque la compuerta no se cumpla (80°).
+  for (int mode = 0; mode < 2; mode++) {
+    StateMachine sm;
+    sm.setDeployMode(mode ? DEPLOY_MODE_B : DEPLOY_MODE_A);
+    const float h_top = mode ? 100.0f : 450.0f;
+    const float h_late = mode ? 84.0f : 210.0f;  // bajo h_disp (B: 90 m, A: 210 m)
+    sm.begin(0);
+    uint32_t t = 0;
+    for (; t < 2000; t += 10) sm.step(base(t));
+    for (float h = 30; h < h_top; t += 10, h += 0.06f) {
+      SmInput in = base(t);
+      in.h = h;
+      in.vz = 6;
+      sm.step(in);
+    }
+    // Baja g con vz que tarda en confirmar (estimador retrasado), y salto a h_late
+    for (int i = 0; i < 30; i++, t += 10) {
+      SmInput in = base(t);
+      in.h = h_top;
+      in.vz = -1;
+      in.acc_g = 0.1f;
+      sm.step(in);
+    }
+    SmInput in = base(t);
+    in.h = h_late + 1;
+    in.vz = -20;
+    in.acc_g = 0.1f;
+    sm.step(in);  // confirma: CAIDA
+    TEST_ASSERT_EQUAL(ST_CAIDA, sm.state());
+    in = base(t += 10);
+    in.h = h_late;
+    in.vz = -20;
+    in.tilt_deg = 80;
+    sm.step(in);
+    if (mode) {
+      TEST_ASSERT_EQUAL(ST_DESPLIEGUE, sm.state());
+      TEST_ASSERT_TRUE(sm.lateFire());
+      TEST_ASSERT_EQUAL_UINT32(t, sm.tFire());
+      TEST_ASSERT_EQUAL(FLAG_DISPARO, sm.out().flags & (FLAG_DISPARO | FLAG_DISPARO_RESPALDO));
+    } else {
+      TEST_ASSERT_EQUAL(ST_CAIDA, sm.state());  // A: espera la compuerta, como siempre
+      TEST_ASSERT_FALSE(sm.lateFire());
+    }
+  }
+}
+
+// Ruido determinista en [-1, 1]
+static float noise(uint32_t &s) {
+  s = s * 1664525u + 1013904223u;
+  return ((s >> 8) & 0xFFFF) / 32767.5f - 1.0f;
+}
+
+static void test_modo_b_estacionamiento_largo() {
+  // 10 min estacionado a 100 m (sobre el mínimo de 85 m): h ±1.5 m, vz ±1 m/s, |a| = 1 ±0.4 g
+  // (vibración) e inclinación variable. No hay liberación ni se vuelve a TIERRA; luego la
+  // suelta se detecta normal.
+  StateMachine sm;
+  sm.setDeployMode(DEPLOY_MODE_B);
+  sm.begin(0);
+  uint32_t t = 0, seed = 7;
+  for (; t < 2000; t += 10) sm.step(base(t));
+  for (float h = 30; h < 100; t += 10, h += 0.06f) {
+    SmInput in = base(t);
+    in.h = h;
+    in.vz = 6;
+    sm.step(in);
+  }
+  for (int i = 0; i < 60000; i++, t += 10) {
+    SmInput in = base(t);
+    in.h = 100 + 1.5f * noise(seed);
+    in.vz = noise(seed);
+    in.acc_g = 1.0f + 0.4f * noise(seed);
+    in.tilt_deg = 10 + 10 * noise(seed);
+    sm.step(in);
+    if (sm.state() != ST_ASCENSO) break;
+  }
+  TEST_ASSERT_EQUAL(ST_ASCENSO, sm.state());
+  TEST_ASSERT_EQUAL(0, sm.out().lowg_descartadas);
+  TEST_ASSERT_FALSE(sm.out().servo.power);
+  // Un dron que baja despacio 12 m (vz -2 m/s) tampoco cuenta como liberación (c)
+  float h = 100;
+  for (int i = 0; i < 600; i++, t += 10, h -= 0.02f) {
+    SmInput in = base(t);
+    in.h = h;
+    in.vz = -2;
+    sm.step(in);
+  }
+  TEST_ASSERT_EQUAL(ST_ASCENSO, sm.state());
+  // Bache: 0.3 s de caída libre (vz hasta -3 m/s) y recupera: se descarta
+  float vz = 0;
+  for (int i = 0; i < 30; i++, t += 10) {
+    SmInput in = base(t);
+    vz -= 0.098f;
+    in.h = h;
+    in.vz = vz;
+    in.acc_g = 0.05f;
+    sm.step(in);
+  }
+  for (int i = 0; i < 100; i++, t += 10) {
+    SmInput in = base(t);
+    in.h = h;
+    in.vz = vz < 0 ? (vz += 0.05f) : 0;
+    sm.step(in);
+  }
+  TEST_ASSERT_EQUAL(ST_ASCENSO, sm.state());
+  TEST_ASSERT_EQUAL(1, sm.out().lowg_descartadas);
+}
+
+static void test_modo_b_criterio_c_sin_imu() {
+  // Sin IMU (solo barómetro): 8 m bajo el máximo y vz < -5 m/s -> liberación.
+  StateMachine sm;
+  sm.setDeployMode(DEPLOY_MODE_B);
+  sm.begin(0);
+  uint32_t t = 0;
+  for (; t < 2000; t += 10) sm.step(base(t));
+  for (float h = 30; h < 100; t += 10, h += 0.06f) {
+    SmInput in = base(t);
+    in.h = h;
+    in.vz = 6;
+    sm.step(in);
+  }
+  float h = 100, vz = 0;
+  for (int i = 0; i < 300 && sm.state() == ST_ASCENSO; i++, t += 10) {
+    SmInput in = base(t);
+    in.imu_ok = false;
+    vz -= 0.06f;  // el vz de un Kalman sin IMU va retrasado
+    h += vz * 0.01f;
+    in.h = h;
+    in.vz = vz;
+    sm.step(in);
+  }
+  TEST_ASSERT_EQUAL(ST_CAIDA, sm.state());
+  // Llega por (b) (vz < -8 m/s 0.2 s) o por (c); en cualquier caso antes de 8.5 m de caída
+  TEST_ASSERT_TRUE(h > 100 - 8.5f - 0.5f);
+}
+
+static void test_despegue_lento_sm() {
+  // Ascenso de dron a 1.5 m/s (h y vz exactos): ASCENSO a 20 m + 3 s = 24.5 m.
+  StateMachine sm;
+  sm.begin(0);
+  uint32_t t = 0;
+  for (; t < 2000; t += 10) sm.step(base(t));
+  float h = 0;
+  for (; h < 40 && sm.state() == ST_TIERRA; t += 10, h += 0.015f) {
+    SmInput in = base(t);
+    in.h = h;
+    in.vz = 1.5f;
+    sm.step(in);
+  }
+  TEST_ASSERT_EQUAL(ST_ASCENSO, sm.state());
+  TEST_ASSERT_FLOAT_WITHIN(0.1f, 24.5f, h);
 }
 
 static void test_modo_b_sin_baro() {
@@ -677,8 +947,14 @@ int main(int, char **) {
   RUN_TEST(test_servo_pulso);
   RUN_TEST(test_demo);
   RUN_TEST(test_modos_parametros);
-  RUN_TEST(test_modo_b_altura_minima_90);
+  RUN_TEST(test_modo_b_altura_minima_85);
+  RUN_TEST(test_modo_b_detector_rapido);
   RUN_TEST(test_modo_b_h_disp_y_respaldo);
+  RUN_TEST(test_modo_b_compuerta_0_3s);
+  RUN_TEST(test_modo_b_disparo_tardio);
+  RUN_TEST(test_modo_b_estacionamiento_largo);
+  RUN_TEST(test_modo_b_criterio_c_sin_imu);
+  RUN_TEST(test_despegue_lento_sm);
   RUN_TEST(test_modo_b_sin_baro);
   RUN_TEST(test_modo_c_desde_tierra);
   RUN_TEST(test_toque_largo);

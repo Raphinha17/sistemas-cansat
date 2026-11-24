@@ -6,11 +6,11 @@ SIM,... por fila al ritmo del reloj (o más rápido con --speed). La placa usa e
 lecturas en lugar de sus sensores: sirve para la prueba en banco con el servo real.
 Lo que imprime la placa se muestra en pantalla.
 
-Ejemplos:
-  py tools/flight_sim.py --raw-csv vuelo.csv --seed 1
-  py tools/sim_serial.py --csv vuelo.csv --port COM5
-  py tools/sim_serial.py --csv vuelo.csv --port COM5 --modo B   # MODO B antes del vuelo
-  py tools/sim_serial.py --csv vuelo.csv --dry-run --out lineas.txt   # sin placa
+Ejemplos (Linux: python del .venv y /dev/ttyUSB*; Windows: py y COMx):
+  python tools/flight_sim.py --raw-csv vuelo.csv --seed 1 --mode B   # suelta 100 m -> 80 m
+  python tools/sim_serial.py --csv vuelo.csv --port /dev/ttyUSB1 --modo B   # MODO B antes
+  py tools/sim_serial.py --csv vuelo.csv --port COM5 --modo B              # (Windows)
+  python tools/sim_serial.py --csv vuelo.csv --dry-run --out lineas.txt    # sin placa
 
 Antes de las líneas manda SIM_INICIO (la placa entra al modo simulación y reinicia de cero,
 aunque no tenga sensores o venga de otro vuelo simulado); --no-inicio lo omite.
@@ -225,7 +225,7 @@ def prepare(ser, modo: Optional[str] = None, wait_s: float = 0.4, echo=None) -> 
 def main(argv: Optional[list] = None) -> int:
     ap = argparse.ArgumentParser(description="Vuelo simulado -> placa (líneas SIM por serial)")
     ap.add_argument("--csv", required=True, help="CSV crudo de flight_sim.py --raw-csv")
-    ap.add_argument("--port", help="puerto serial de la placa (p. ej. COM5)")
+    ap.add_argument("--port", help="puerto serial de la placa (p. ej. /dev/ttyUSB1 o COM5)")
     ap.add_argument("--baud", type=int, default=115200)
     ap.add_argument("--speed", type=float, default=1.0,
                     help="factor de velocidad (1 = tiempo real; el enlace a 115200 admite ~1.3)")

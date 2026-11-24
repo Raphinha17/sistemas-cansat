@@ -1,36 +1,51 @@
 #!/usr/bin/env python3
-"""Simulador de vuelo sintético del CanSat: emite paquetes de 32 B (ver docs/SPEC.md).
+r"""Simulador de vuelo sintético del CanSat: emite paquetes de 32 B (ver docs/SPEC.md).
 
-Perfil: 3 s de autoprueba + 20 s de espera en tierra, ascenso a 450 m, liberación,
-caída libre con arrastre (velocidad terminal ~35 m/s), despliegue del autogiro a
-~200 m, descenso a ~10 m/s, aterrizaje y 60 s de transmisión posterior.
+Perfil (modo B, el lanzamiento real y el de por defecto): 3 s de autoprueba + 20 s de
+espera en tierra, ascenso de dron a 3 m/s hasta 100 m, 20 s de estacionamiento a 100 m
+(con ±0.5 m de oscilación de altura), suelta, caída libre con arrastre (velocidad
+terminal ~35 m/s), despliegue del autogiro a ~80 m, descenso a ~10 m/s, aterrizaje y 60 s
+de transmisión posterior. El modo A (reglamento anterior) sube a 6 m/s hasta 450 m,
+espera 2 s y despliega a ~200 m.
 
 La lógica de estados es una réplica simplificada de la SPEC que corre sobre las
 señales *medidas* (con ruido), no sobre la verdad física, para que la salida se
 parezca a lo que verá la estación terrena.
 
-Ejemplos:
-  py tools/flight_sim.py --hex                       # hex por stdout
-  py tools/flight_sim.py --out vuelo.bin --seed 3
-  py tools/flight_sim.py --port COM5 --realtime
-  py tools/flight_sim.py --fail baro --fail-at 40 --loss 10 --hex
+Ejemplos (Linux: python o .venv/bin/python; Windows: py o .\.venv\Scripts\python):
+  python tools/flight_sim.py --hex                       # hex por stdout (modo B)
+  python tools/flight_sim.py --out vuelo.bin --seed 3
+  python tools/flight_sim.py --port /dev/ttyUSB1 --realtime     # Windows: --port COM5
+  python tools/flight_sim.py --fail baro --fail-at 45 --loss 10 --hex
 
-Modos de despliegue (DEPLOY_MODE del firmware; por defecto A, el vuelo del concurso):
-  --mode A                    liberación a 450 m, autogiro a 200 m
-  --mode B                    liberación a 100 m, autogiro a 50 m
+Modos de despliegue (DEPLOY_MODE del firmware; por defecto B, el lanzamiento real):
+  --mode B                    suelta a 100 m tras 20 s de estacionamiento, autogiro a 80 m
+                              (liberación válida > 85 m; detector rápido, ver MODES)
+  --mode A                    liberación a 450 m, autogiro a 200 m (válida > 240 m)
   --mode C                    tinaco: sube a 8 m, se suelta y dispara al detectar la
                               caída libre (sin altura mínima, h_disp ni compuerta)
   --release-alt H             altura de liberación (sustituye la del modo; alias --h-top)
   --deploy-alt H              altura del autogiro (sustituye la del modo). La liberación
-                              es válida por encima de deploy-alt + 40 m.
+                              es válida por encima de deploy-alt + margen del modo
+                              (A: 40 m, B: 5 m).
+  --v-climb V                 velocidad de ascenso del dron (A: 6 m/s, B: 3 m/s)
+  --t-hover T                 estacionamiento antes de soltar (A: 2 s, B: 20 s)
+  --vib G                     vibración del acelerómetro en ascenso y estacionamiento
+                              (g por eje; por defecto 0.06 en ascenso y 0.03 quieto)
 
 Escenarios para las pruebas de la máquina de estados (los valores por defecto no
 cambian el vuelo nominal):
-  --release-alt 200           el dron libera a 200 m (debajo del mínimo de 240 m)
-  --false-release 70          0.25 s de caída libre en el ascenso (falsa liberación)
+  --mode B --release-alt 95|90|105   suelta a otra altura (todas válidas en B)
+  --mode B --release-alt 80   suelta bajo el mínimo de 85 m: no hay liberación
+  --mode B --false-release 70 0.25 s de caída libre del dron estacionado a 100 m
+  --mode B --false-release 40 lo mismo durante el ascenso (~50 m)
+  --mode B --v-climb 1.5 --t-hover 120 --vib 0.3   ascenso lento, estacionamiento largo
+                              y vibración fuerte del dron
+  --release-alt 200           modo A: el dron libera a 200 m (debajo del mínimo de 240 m)
+  --false-release 70          modo A: 0.25 s de caída libre en el ascenso
   --fall-tilt 70              caída libre inclinada ~70° (compuerta de 45° no se cumple)
   --fall-tilt 60 --fall-tilt-until-h 214   inclinada hasta 214 m, luego se endereza
-  --v-terminal 60             caída más rápida (respaldo de 160 m)
+  --v-terminal 60             caída más rápida (respaldo de 160 m del modo A)
 """
 from __future__ import annotations
 
@@ -63,8 +78,9 @@ T_OPEN = 0.6                # tiempo de apertura del autogiro
 T_REST_LAND = 1.0           # reposo tras impacto antes de ATERRIZADO
 T_POST_LAND = 60.0
 
-# Parámetros de la SPEC (ver docs/SPEC.md). Las alturas son las del modo A; en general
-# H_RELEASE_MIN = deploy_alt + RELEASE_MARGIN y el respaldo sale de _backup_alt().
+# Parámetros de la SPEC (ver docs/SPEC.md). Las alturas y el detector son los del modo A;
+# en general H_RELEASE_MIN = deploy_alt + release_margin y el respaldo es backup_alt (o
+# _backup_alt() si no se da). Los del modo B están en MODES.
 H_RELEASE_MIN = 240.0
 H_DEPLOY = 200.0
 RELEASE_MARGIN = 40.0
@@ -78,12 +94,23 @@ T_DEPLOY_STATE = 1.0        # duración del estado 4 (sin validar el pico de ace
 
 T_LOWG = 0.15               # s de baja g (|a| < 0.35 g) para detectar la caída libre
 
-# Modos de despliegue: valores por defecto de simulate() para --mode.
+# Modos de despliegue: valores por defecto de simulate() para --mode. Los umbrales del
+# detector replican los de firmware/include/config.h (DEPLOY_B_*).
 MODES = {
     "A": dict(h_top=H_TOP, deploy_alt=H_DEPLOY, t_fire_no_baro=T_FIRE_NO_BARO),
-    "B": dict(h_top=100.0, deploy_alt=50.0, t_fire_no_baro=1.5),
+    "B": dict(h_top=100.0, deploy_alt=80.0, t_fire_no_baro=1.0,
+              v_climb=3.0, t_hover=20.0, hover_wander=0.5, p0_hold=True,
+              release_margin=5.0, backup_alt=70.0,
+              lowg_t=0.10, confirm_vz=-5.0, confirm_t=0.6, fast_vz=-8.0, fast_t=0.2,
+              drop_from_max=8.0, drop_vz=-5.0, gate_backup=0.3, late_fire_now=True),
     "C": dict(h_top=8.0, immediate=True),
 }
+DEFAULT_MODE = "B"
+
+T_WANDER = 8.0              # s, periodo de la oscilación de altura en el estacionamiento
+HOVER_WN = 1.5              # rad/s, control de altura del dron (estacionamiento dinámico)
+HOVER_ZETA = 0.8
+HOVER_A_MAX = 3.0           # m/s^2
 
 FALSE_RELEASE_T = 0.25       # s de caída libre de la falsa liberación (--false-release)
 FALL_TILT_SIG = 5.0         # ° de oscilación cuando se fuerza la inclinación (--fall-tilt)
@@ -106,7 +133,7 @@ def _alt_from_p(p: float, p0: float) -> float:
 
 
 def _backup_alt(deploy_alt: float) -> float:
-    """Respaldo por altura: 160 m en A (200 - 40) y 40 m en B (50 - 10)."""
+    """Respaldo por altura si no se da backup_alt: 160 m en A (200 - 40)."""
     return deploy_alt - min(40.0, 0.2 * deploy_alt)
 
 
@@ -119,7 +146,17 @@ def simulate(seed: int = 1, fail: Optional[str] = None, fail_at: float = 30.0,
              fall_tilt_until_h: float = 0.0,
              deploy_alt: float = H_DEPLOY,
              t_fire_no_baro: float = T_FIRE_NO_BARO,
-             immediate: bool = False) -> Iterator[Tuple[float, T.Packet]]:
+             immediate: bool = False,
+             v_climb: float = V_CLIMB, t_hover: float = T_HOVER,
+             hover_wander: float = 0.0, vib_g: Optional[float] = None,
+             p0_hold: bool = False,
+             release_margin: float = RELEASE_MARGIN,
+             backup_alt: Optional[float] = None,
+             lowg_t: float = T_LOWG, confirm_vz: float = -8.0, confirm_t: float = 1.0,
+             fast_vz: float = -12.0, fast_t: float = 0.4,
+             drop_from_max: float = DROP_FROM_MAX, drop_vz: float = math.inf,
+             gate_backup: float = T_GATE_BACKUP,
+             late_fire_now: bool = False) -> Iterator[Tuple[float, T.Packet]]:
     """Genera (t, Packet) en el instante de cada transmisión (antes de aplicar pérdidas).
 
     Escenarios (por defecto, vuelo nominal):
@@ -127,9 +164,21 @@ def simulate(seed: int = 1, fail: Optional[str] = None, fail_at: float = 30.0,
       false_release_at: instante (s) de una caída libre breve (FALSE_RELEASE_T) en el ascenso.
       fall_tilt: inclinación (°, en roll) a la que tiende el cuerpo en caída libre, con
       oscilación reducida (FALL_TILT_SIG); se mantiene mientras h > fall_tilt_until_h.
-      deploy_alt: altura del autogiro (liberación válida por encima de deploy_alt + 40 m).
+      deploy_alt: altura del autogiro (liberación válida por encima de deploy_alt +
+      release_margin).
       t_fire_no_baro: disparo por tiempo desde la liberación con el barómetro muerto.
       immediate: modo C (tinaco): disparo al detectar la caída libre, también en TIERRA.
+      v_climb, t_hover: velocidad de ascenso y duración del estacionamiento antes de soltar.
+      hover_wander: amplitud (m) de la oscilación de altura del dron estacionado; con > 0
+      (o con una falsa liberación en el estacionamiento) el estacionamiento es dinámico
+      (control de altura del dron).
+      vib_g: vibración del acelerómetro (g por eje) en ascenso y estacionamiento.
+      p0_hold: la réplica pausa el promedio de p0 con el CanSat fuera del suelo, como el
+      firmware (SM_P0_PAUSA_MAX_S). El modo A conserva la réplica anterior para que sus
+      datos no cambien; el firmware aplica la pausa en todos los modos.
+      release_margin, backup_alt, lowg_t, confirm_vz, confirm_t, fast_vz, fast_t,
+      drop_from_max, drop_vz, gate_backup, late_fire_now: detector y disparo de la
+      réplica (los del modo B, en MODES, replican config.h).
 
     Si se da raw_cb, se llama a 100 Hz con una tupla en el orden de RAW_COLUMNS
     (sensores crudos + verdad física), útil para probar filtros del firmware.
@@ -139,8 +188,8 @@ def simulate(seed: int = 1, fail: Optional[str] = None, fail_at: float = 30.0,
 
     p0_true = 101325.0 + rnd.uniform(-600, 600)
     acc_bias = [gauss(0, 0.01) for _ in range(3)]
-    h_release_min = deploy_alt + RELEASE_MARGIN
-    h_backup = _backup_alt(deploy_alt)
+    h_release_min = deploy_alt + release_margin
+    h_backup = _backup_alt(deploy_alt) if backup_alt is None else backup_alt
     k_fall = G / v_terminal ** 2
     k_chute = G / V_CHUTE ** 2
     launch_t = T_SELFTEST + T_GROUND
@@ -187,6 +236,8 @@ def simulate(seed: int = 1, fail: Optional[str] = None, fail_at: float = 30.0,
     t_rel_det = None
     hdisp_t0 = None
     fire_by_backup = False
+    first_caida = False
+    hover_dyn = False
     t_land_state = None
     seq = 0
     next_tx = 0.0
@@ -217,7 +268,7 @@ def simulate(seed: int = 1, fail: Optional[str] = None, fail_at: float = 30.0,
             if t >= launch_t:
                 phys = "ascent"
         if phys == "ascent":
-            v_target = min(V_CLIMB, math.sqrt(max(0.0, 2 * A_CLIMB * (h_top - h))))
+            v_target = min(v_climb, math.sqrt(max(0.0, 2 * A_CLIMB * (h_top - h))))
             dv = max(-A_CLIMB * DT, min(A_CLIMB * DT, v_target - vz))
             if false_release_at is not None and false_release_at <= t < false_release_at + FALSE_RELEASE_T:
                 dv = -G * DT  # caída libre breve (el dron cae y se recupera)
@@ -232,9 +283,26 @@ def simulate(seed: int = 1, fail: Optional[str] = None, fail_at: float = 30.0,
                 phys = "hover"
                 t_hover0 = t
         elif phys == "hover":
-            f_spec = 1.0
+            in_false = (false_release_at is not None
+                        and false_release_at <= t < false_release_at + FALSE_RELEASE_T)
+            if in_false or hover_wander > 0:
+                hover_dyn = True
+            if hover_dyn:
+                # Dron estacionado con control de altura: sigue h_top + oscilación; durante
+                # una falsa liberación cae libre y luego se recupera.
+                target = h_top + hover_wander * math.sin(2 * math.pi * (t - t_hover0) / T_WANDER)
+                if in_false:
+                    a_up = -G
+                else:
+                    a_up = HOVER_WN ** 2 * (target - h) - 2 * HOVER_ZETA * HOVER_WN * vz
+                    a_up = max(-HOVER_A_MAX, min(HOVER_A_MAX, a_up))
+                vz += a_up * DT
+                h += vz * DT
+                f_spec = 1.0 + a_up / G
+            else:
+                f_spec = 1.0
             sig, tau = 3.0, 1.5
-            if t - t_hover0 >= T_HOVER:
+            if t - t_hover0 >= t_hover:
                 phys = "fall"
                 t_rel = t
         elif phys == "fall":
@@ -281,6 +349,8 @@ def simulate(seed: int = 1, fail: Optional[str] = None, fail_at: float = 30.0,
         # ---------- sensores ----------
         r_, p_ = math.radians(roll), math.radians(pitch)
         vib = 0.01 if phys in ("ground", "impact") else (0.06 if phys == "ascent" else 0.03)
+        if vib_g is not None and phys in ("ascent", "hover"):
+            vib = vib_g
         f_body = f_spec
         a_true_b = [-math.sin(p_) * f_body,
                     math.sin(r_) * math.cos(p_) * f_body,
@@ -340,7 +410,9 @@ def simulate(seed: int = 1, fail: Optional[str] = None, fail_at: float = 30.0,
         if baro_tick and not baro_dead:
             if p0_est is None:
                 p0_est = p_meas
-            if not p0_frozen:
+            hold = (p0_hold and state == T.TIERRA and p0_n > 0
+                    and not (abs(est_vz) < 0.5 and abs(est_h) < 3.0))
+            if not p0_frozen and not hold:
                 p0_n += 1
                 p0_est += (p_meas - p0_est) / min(p0_n, 30.0 / BARO_DT)  # ~30 s de media móvil
             h_meas = _alt_from_p(p_meas, p0_est)
@@ -392,27 +464,28 @@ def simulate(seed: int = 1, fail: Optional[str] = None, fail_at: float = 30.0,
                 if not imu_dead:
                     if mag < 0.35:
                         lowg_t0 = lowg_t0 if lowg_t0 is not None else t
-                        if t - lowg_t0 >= 0.15 and confirm_deadline is None:
-                            confirm_deadline = t + 1.0
+                        if t - lowg_t0 >= lowg_t and confirm_deadline is None:
+                            confirm_deadline = t + confirm_t
                     else:
                         lowg_t0 = None
                     if confirm_deadline is not None:
-                        if est_vz < -8.0:
+                        if est_vz < confirm_vz:
                             released = True
                         elif t > confirm_deadline:
                             confirm_deadline = None
-                if est_vz < -12.0:
+                if est_vz < fast_vz:
                     fastfall_t0 = fastfall_t0 if fastfall_t0 is not None else t
-                    if t - fastfall_t0 >= 0.4:
+                    if t - fastfall_t0 >= fast_t:
                         released = True
                 else:
                     fastfall_t0 = None
-                if not baro_dead and est_h < h_max - DROP_FROM_MAX:
+                if not baro_dead and est_h < h_max - drop_from_max and est_vz < drop_vz:
                     released = True
             if released and t - launch_t > 5.0:
                 new_state = T.CAIDA
                 flags |= T.F_LIBERACION
                 t_rel_det = t
+                first_caida = True
         elif state == T.CAIDA:
             fire = False
             if immediate:
@@ -424,11 +497,12 @@ def simulate(seed: int = 1, fail: Optional[str] = None, fail_at: float = 30.0,
                 h_disp = deploy_alt + abs(est_vz) * T_LAT
                 if est_h <= h_disp:
                     hdisp_t0 = hdisp_t0 if hdisp_t0 is not None else t
-                    gate = imu_dead or angle <= ANGLE_GATE
+                    gate = imu_dead or angle <= ANGLE_GATE or (first_caida and late_fire_now)
                     if gate:
                         fire = True
-                    elif t - hdisp_t0 >= T_GATE_BACKUP:
+                    elif t - hdisp_t0 >= gate_backup:
                         fire, fire_by_backup = True, True
+                first_caida = False
                 if est_h <= h_backup and not fire:
                     fire, fire_by_backup = True, True
             if fire:
@@ -509,18 +583,25 @@ def main(argv=None) -> int:
     ap.add_argument("--fail-at", type=float, default=30.0, help="s desde el inicio (def. 30)")
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--out", help="archivo de salida")
-    ap.add_argument("--port", help="puerto serial (p. ej. COM5)")
+    ap.add_argument("--port", help="puerto serial (p. ej. /dev/ttyUSB1 o COM5)")
     ap.add_argument("--baud", type=int, default=115200)
     ap.add_argument("--hex", action="store_true", help="una línea hex por paquete en vez de binario")
     ap.add_argument("--realtime", action="store_true", help="emite a ritmo de reloj real")
     ap.add_argument("--raw-csv", help="escribe sensores crudos + verdad a 100 Hz (CSV) para "
                     "probar los filtros del firmware; si no hay --out/--port/--hex, no emite paquetes")
-    ap.add_argument("--mode", choices=sorted(MODES), default="A",
-                    help="modo de despliegue (def. A: 450 m -> 200 m; B: 100 m -> 50 m; C: tinaco)")
+    ap.add_argument("--mode", choices=sorted(MODES), default=DEFAULT_MODE,
+                    help="modo de despliegue (def. B: 100 m -> 80 m, lanzamiento real; "
+                         "A: 450 m -> 200 m; C: tinaco)")
     ap.add_argument("--release-alt", "--h-top", dest="h_top", type=float, default=None,
                     help="altura de liberación (def. la del modo: A 450 m, B 100 m, C 8 m)")
     ap.add_argument("--deploy-alt", type=float, default=None,
-                    help="altura del autogiro (def. la del modo: A 200 m, B 50 m)")
+                    help="altura del autogiro (def. la del modo: A 200 m, B 80 m)")
+    ap.add_argument("--v-climb", type=float, default=None,
+                    help="velocidad de ascenso del dron (def. A 6 m/s, B 3 m/s)")
+    ap.add_argument("--t-hover", type=float, default=None,
+                    help="s de estacionamiento antes de soltar (def. A 2 s, B 20 s)")
+    ap.add_argument("--vib", type=float, default=None,
+                    help="vibración del acelerómetro en ascenso/estacionamiento (g por eje)")
     ap.add_argument("--v-terminal", type=float, default=V_TERMINAL,
                     help="velocidad terminal en caída libre (def. 35 m/s)")
     ap.add_argument("--false-release", type=float, metavar="T",
@@ -555,6 +636,12 @@ def main(argv=None) -> int:
             kw["h_top"] = a.h_top
         if a.deploy_alt is not None:
             kw["deploy_alt"] = a.deploy_alt
+        if a.v_climb is not None:
+            kw["v_climb"] = a.v_climb
+        if a.t_hover is not None:
+            kw["t_hover"] = a.t_hover
+        if a.vib is not None:
+            kw["vib_g"] = a.vib
         for t, pkt in simulate(a.seed, a.fail, a.fail_at, a.rate, raw_cb,
                                v_terminal=a.v_terminal, false_release_at=a.false_release,
                                fall_tilt=a.fall_tilt, fall_tilt_until_h=a.fall_tilt_until_h,

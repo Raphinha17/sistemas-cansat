@@ -129,10 +129,18 @@ la FIFO de 128 B). Además `monitor_speed`, el monitor y `rx_station` siguen a 1
 
 ## Prueba en banco con `tools/sim_serial.py`
 
+```bash
+# Linux (.venv activado: source .venv/bin/activate)
+python tools/flight_sim.py --raw-csv vuelo.csv --seed 1 --mode B
+python tools/sim_serial.py --csv vuelo.csv --port /dev/ttyUSB1 --modo B --fin
 ```
-py tools/flight_sim.py --raw-csv vuelo.csv --seed 1
-py tools/sim_serial.py --csv vuelo.csv --port COM5 --modo A --fin
+```powershell
+# Windows
+py tools\flight_sim.py --raw-csv vuelo.csv --seed 1 --mode B
+py tools\sim_serial.py --csv vuelo.csv --port COM5 --modo B --fin
 ```
+(`--mode B` es el de por defecto de `flight_sim.py`: lanzamiento real, suelta a 100 m y
+autogiro a 80 m. El `--modo` de `sim_serial.py` debe ser el mismo que el del CSV.)
 
 `sim_serial.py` manda `SIM_INICIO` (y `MODO` con `--modo`) y luego convierte cada fila del CSV crudo (100 Hz) en una línea `SIM,...*CRC`, la
 envía a tiempo real, atiende los `SIM_REPITE` y muestra lo que imprime la placa. Al final

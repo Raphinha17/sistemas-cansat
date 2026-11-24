@@ -149,8 +149,16 @@
 // menores que esto), no el del instante de la detección, que ya incluye ~6 s de subida.
 #define SM_P0_QUIETO_VZ_MS 0.5f
 #define SM_P0_QUIETO_H_M 3.0f
-// 2 ASCENSO -> 3 CAIDA (liberación). La altura mínima depende del modo (DEPLOY_*).
-#define SM_LIB_LOWG_G 0.35f          // |a| menor que esto ...
+// Pausa del promedio de p0 en TIERRA: mientras el CanSat NO está quieto en el suelo (ya
+// subió más de SM_P0_QUIETO_H_M o se mueve), el promedio móvil deja de recibir muestras.
+// Sin la pausa, en un ascenso lento de dron el promedio "persigue" a la subida: la altura
+// relativa se satura en ~15 s x v (22 m a 1.5 m/s) y vz relativa tiende a 0, y nunca se
+// cumplía la condición de despegue (PREGUNTAS P57). Si la pausa dura más que esto sin
+// volver a estar quieto (p. ej. lo subieron a pie a una loma), el promedio se reanuda.
+#define SM_P0_PAUSA_MAX_S 300.0f
+// 2 ASCENSO -> 3 CAIDA (liberación), detector del modo A (y C). La altura mínima y el
+// detector de cada modo están en "Modos de despliegue" (DEPLOY_*).
+#define SM_LIB_LOWG_G 0.35f          // |a| menor que esto ... (todos los modos)
 #define SM_LIB_LOWG_T_S 0.15f        // ... durante este tiempo
 #define SM_LIB_CONFIRMA_VZ_MS -8.0f  // confirmada por vz menor que esto ...
 #define SM_LIB_CONFIRMA_T_S 1.0f     // ... dentro de este tiempo
@@ -160,7 +168,7 @@
 // 3 CAIDA -> 4 DESPLIEGUE (disparo). Alturas según el modo (DEPLOY_*).
 #define SM_T_LATENCIA_S 0.5f         // latencia servo + apertura (inicial, ajustar)
 #define SM_COMPUERTA_DEG 45.0f       // eje del cuerpo vs vertical
-#define SM_COMPUERTA_RESPALDO_S 1.5f // si la compuerta no se cumple en este tiempo, disparar
+#define SM_COMPUERTA_RESPALDO_S 1.5f // modo A: si la compuerta no se cumple en este tiempo, disparar
 // 5 DESCENSO
 #define SM_DESC_VZ_MIN_MS 8.0f       // rango de la SPEC para el descenso con autogiro
 #define SM_DESC_VZ_MAX_MS 12.0f
@@ -184,22 +192,52 @@
 
 // ---------------------------------------------------------------------------
 // Modos de despliegue (DEPLOY_MODE). Se elige con el comando serial "MODO A|B|C", se
-// guarda en NVS y se ve en STAT y en el log. Solo se puede cambiar en los estados 0 y 1.
-//  A: liberación a ~450 m, autogiro a 200 m (concurso).
-//  B: liberación a ~100 m, autogiro a 50 m (prueba baja).
+// guarda en NVS y se ve en STAT, en el arranque y en el log. Solo se puede cambiar en los
+// estados 0 y 1.
+//  B: LANZAMIENTO REAL (reglamento vigente, por defecto): el dron sube a ~100 m sobre el
+//     suelo de despegue y suelta; autogiro y separación a 80 m. Detector de liberación
+//     rápido (la caída hasta 80 m dura ~2 s). Ver PREGUNTAS P57 a P59.
+//  A: reglamento anterior: liberación a ~450 m, autogiro a 200 m.
 //  C: tinaco: dispara en cuanto detecta la caída libre (sin altura mínima, sin h_disp
 //     ni compuerta de ángulo). Ver PREGUNTAS P33.
-// En A y B: liberación válida solo si h > DEPLOY_ALT + DEPLOY_LIB_MARGEN_M (A = 240 m,
-// B = 90 m) y h_disp = DEPLOY_ALT + |vz| * SM_T_LATENCIA_S.
+// En A y B: liberación válida solo si h > DEPLOY_ALT + DEPLOY_LIB_MARGEN_x_M (A = 240 m,
+// B = 85 m) y h_disp = DEPLOY_ALT + |vz| * SM_T_LATENCIA_S.
 // ---------------------------------------------------------------------------
-#define DEPLOY_MODE_DEFAULT 'A'
-#define DEPLOY_LIB_MARGEN_M 40.0f
+#define DEPLOY_MODE_DEFAULT 'B'
+
+// --- Modo A (450 m -> 200 m): detector y compuerta con los valores SM_* de arriba ---
 #define DEPLOY_ALT_A_M 200.0f
+#define DEPLOY_LIB_MARGEN_A_M 40.0f  // liberación válida > 240 m
 #define DEPLOY_RESPALDO_A_M 160.0f   // por debajo de esta altura, disparar siempre
 #define DEPLOY_T_SIN_BARO_A_S 7.0f   // baro muerto: disparo por tiempo desde la liberación
-#define DEPLOY_ALT_B_M 50.0f
-#define DEPLOY_RESPALDO_B_M 40.0f    // suposición (PREGUNTAS P32)
-#define DEPLOY_T_SIN_BARO_B_S 1.5f   // suposición (PREGUNTAS P32)
+
+// --- Modo B (lanzamiento real: suelta ~100 m -> autogiro a 80 m) ---
+// Suelta a 100 m: h cruza h_disp (~88 m) ~1.6 s después de soltarse. El detector del modo
+// A tarda ~0.85 s (baja g 0.15 s + vz < -8 m/s); el de B ~0.5 s, y deja ~1.1 s / ~11 m de
+// margen (PREGUNTAS P58).
+#define DEPLOY_ALT_B_M 80.0f
+// Liberación válida > 80 + 5 = 85 m. Con +10 m (90 m) una suelta a 90 m quedaría justo en
+// el umbral y la mitad de las veces se descartaría por el ruido del barómetro (P58).
+#define DEPLOY_LIB_MARGEN_B_M 5.0f
+#define DEPLOY_RESPALDO_B_M 70.0f    // por debajo de esta altura, disparar siempre (P58)
+// Baro muerto: disparo por tiempo desde la liberación detectada. Suelta a 100 m ->
+// autogiro a ~83 m (más alto es más seguro: sin barómetro no se sabe la altura).
+#define DEPLOY_T_SIN_BARO_B_S 1.0f
+// Detector de liberación del modo B
+#define DEPLOY_B_LOWG_T_S 0.10f        // |a| < SM_LIB_LOWG_G durante 100 ms ...
+#define DEPLOY_B_CONFIRMA_VZ_MS -5.0f  // ... confirmada por vz < -5 m/s ...
+#define DEPLOY_B_CONFIRMA_T_S 0.6f     // ... en los 0.6 s siguientes
+#define DEPLOY_B_VZ_RAPIDA_MS -8.0f    // o vz < -8 m/s ...
+#define DEPLOY_B_VZ_RAPIDA_T_S 0.2f    // ... durante 0.2 s
+#define DEPLOY_B_BAJA_DESDE_MAX_M 8.0f // o 8 m por debajo del máximo ...
+#define DEPLOY_B_BAJA_VZ_MS -5.0f      // ... bajando a más de 5 m/s (un dron no baja así)
+// Compuerta de 45°: esperar como máximo 0.3 s tras cruzar h_disp. Cada 0.1 s de espera
+// baja el despliegue ~2 m (a ~15-17 m/s): con 1.5 s (modo A) se llegaría al respaldo de
+// 70 m; con 0.3 s el peor caso (cae inclinado) despliega a ~74 m (PREGUNTAS P58).
+#define DEPLOY_B_COMPUERTA_RESPALDO_S 0.3f
+// Liberación detectada con h ya por debajo de h_disp: disparo inmediato, sin esperar la
+// compuerta (en B siempre; en A no, como hasta ahora).
+#define DEPLOY_B_DISPARO_TARDIO_INMEDIATO 1
 
 // ---------------------------------------------------------------------------
 // Servo de liberación del autogiro (MG90S). Ver servo_release.h.

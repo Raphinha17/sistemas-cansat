@@ -7,8 +7,9 @@
 // Salidas (SmOutput): estado, banderas del paquete, orden al servo, tasas de TX y log,
 // y eventos de un ciclo (congelar p0, disparo, vaciar log).
 //
-// Modos de despliegue (setDeployMode): A (450 m -> 200 m, concurso), B (100 m -> 50 m) y
-// C (tinaco: disparo inmediato al detectar la caída libre, también desde TIERRA).
+// Modos de despliegue (setDeployMode): B (lanzamiento real: suelta a ~100 m, autogiro a
+// 80 m; por defecto), A (450 m -> 200 m, reglamento anterior) y C (tinaco: disparo
+// inmediato al detectar la caída libre, también desde TIERRA).
 //
 // Persistencia (reinicio en vuelo): record() devuelve el registro para NVS y
 // recordSeq() cambia cada vez que hay que guardarlo. Quien llama hace la escritura
@@ -23,15 +24,27 @@
 
 static constexpr uint32_t kMissionMagic = 0x314E534D;  // "MSN1"
 
-// Modos de despliegue (DEPLOY_MODE, ver config.h). El modo de vuelo del concurso es A.
+// Modos de despliegue (DEPLOY_MODE, ver config.h). El lanzamiento real es B (por defecto).
 enum DeployMode : uint8_t { DEPLOY_MODE_A = 0, DEPLOY_MODE_B = 1, DEPLOY_MODE_C = 2 };
 
 struct DeployParams {
   float deploy_alt_m = 0;     // DEPLOY_ALT: h_disp = deploy_alt_m + |vz| * SM_T_LATENCIA_S
-  float release_min_m = 0;    // liberación válida solo por encima (DEPLOY_ALT + 40 m)
+  float release_min_m = 0;    // liberación válida solo por encima (DEPLOY_ALT + margen)
   float backup_alt_m = 0;     // respaldo: por debajo de esta altura se dispara siempre
   float t_fire_no_baro_s = 0; // baro muerto: disparo por tiempo desde la liberación
   bool immediate = false;     // C (tinaco): disparo al detectar la caída libre
+  // Detector de liberación (SPEC estado 3). Valores del modo A (SM_LIB_*); B los acorta.
+  float lowg_t_s = SM_LIB_LOWG_T_S;           // (a) |a| < 0.35 g durante esto ...
+  float confirm_vz_ms = SM_LIB_CONFIRMA_VZ_MS; //    ... confirmada por vz < esto ...
+  float confirm_t_s = SM_LIB_CONFIRMA_T_S;     //    ... dentro de este tiempo
+  float fast_vz_ms = SM_LIB_VZ_RAPIDA_MS;      // (b) vz < esto ...
+  float fast_t_s = SM_LIB_VZ_RAPIDA_T_S;       //     ... durante este tiempo
+  float drop_from_max_m = SM_LIB_BAJA_DESDE_MAX_M;  // (c) h < h_max - esto ...
+  float drop_vz_ms = 1e30f;                    //     ... y vz < esto (A: sin condición)
+  // Disparo
+  float gate_backup_s = SM_COMPUERTA_RESPALDO_S;  // espera máxima de la compuerta
+  bool late_fire_now = false;  // liberación detectada con h <= h_disp: disparo inmediato
+  const char *name = "";       // descripción para STAT y el arranque
 };
 
 DeployParams deployParams(DeployMode m);
@@ -99,6 +112,12 @@ class StateMachine {
   }
   DeployMode deployMode() const { return mode_; }
   const DeployParams &deployParamsNow() const { return prm_; }
+  // Solo pruebas: umbrales a medida para el modo m (p. ej. el detector del modo A con las
+  // alturas del B). Se conservan en begin()/beginRecovered() hasta el próximo setDeployMode.
+  void setDeployParams(DeployMode m, const DeployParams &p) {
+    mode_ = m;
+    prm_ = p;
+  }
 
   // Arranque normal: estado 0 (AUTOPRUEBA).
   void begin(uint32_t t_ms);
@@ -115,6 +134,8 @@ class StateMachine {
   uint32_t tRelease() const { return t_rel_; }
   uint32_t tHdisp() const { return t_hdisp_; }
   uint32_t tFire() const { return t_fire_; }
+  // Disparo inmediato porque la liberación se detectó ya por debajo de h_disp.
+  bool lateFire() const { return late_fired_; }
 
  private:
   void enter(uint8_t s, uint32_t t);
@@ -160,6 +181,8 @@ class StateMachine {
   // CAIDA
   uint32_t t_rel_ = 0, t_hdisp_ = 0, t_fire_ = 0;
   float h_disp_ = 0;
+  bool caida_first_ = false;  // primer ciclo de CAIDA (disparo tardío inmediato)
+  bool late_fired_ = false;
 
   // DESPLIEGUE
   ServoSequencer seq_;

@@ -101,6 +101,8 @@ de 30 s está completa (y queda activa durante la misión).
   ocurre 3 s después de pasar 20 m, y para entonces el promedio de 30 s ya incluye
   ~6 s de subida (≈3 m de error en todas las alturas). Al congelarlo, la altura medida
   salta unos decímetros a metros y el Kalman lo absorbe en <1 s.
+- ACTUALIZADO (P57): además, en TIERRA el promedio se pausa mientras el CanSat no está
+  quieto en el suelo; con un ascenso lento de dron el promedio móvil impedía el despegue.
 
 **P13. Log.** Se registran paquetes de 32 B en `/vuelo.bin` de LittleFS: 50 Hz
 (`LOG_HZ`) en los estados 2 a 5 y 1 Hz (`LOG_HZ_TIERRA`) en 0, 1 y 6, más un registro
@@ -160,7 +162,8 @@ detectar (h y vz por integración derivan).
 acelerómetro el Kalman usa velocidad casi constante y vz va retrasada.
 - En el simulador el despliegue quedó a 199.4 m; la prueba tolera ±10 m.
 
-**P22. Altura mínima de liberación (DEPLOY_ALT + 40 m: 240 m en A, 90 m en B).**
+**P22. Altura mínima de liberación (A: DEPLOY_ALT + 40 m = 240 m; B: DEPLOY_ALT + 5 m =
+85 m, ver P58).**
 - SUPOSICIÓN: se evalúa al *inicio* de cada evidencia: al empezar la baja g (criterio
   a), al empezar vz < -12 m/s (b) y con la altura máxima (c). Si se evaluara al confirmar,
   una liberación a ~245 m se rechazaría porque al confirmar ya cayó varios metros.
@@ -247,8 +250,9 @@ directo del regulador de 5 V, así que tiene energía desde que se enciende la p
 
 ## Modos de despliegue, botón PRG y entornos (etapa 3)
 
-**P31. Modo de despliegue (`DEPLOY_MODE`).** A (450 m -> 200 m), B (100 m -> 50 m) y C
-(tinaco), por defecto A. Comando `MODO A|B|C`; `MODO` solo muestra el actual.
+**P31. Modo de despliegue (`DEPLOY_MODE`).** B (lanzamiento real: 100 m -> 80 m, **por
+defecto** desde el cambio de reglamento, P58), A (450 m -> 200 m, reglamento anterior) y C
+(tinaco). Comando `MODO A|B|C`; `MODO` solo muestra el actual (y sus umbrales).
 - SUPOSICIÓN: el modo solo se puede cambiar en AUTOPRUEBA o TIERRA (con la misión en
   curso responde `ERR`), para que un comando por error no cambie las alturas en el aire.
   Se guarda en NVS en una clave aparte del registro de misión ("modo"), así que se
@@ -258,7 +262,8 @@ directo del regulador de 5 V, así que tiene energía desde que se enciende la p
   vigente) y en cada cambio (ver P13). El paquete de telemetría no lleva el modo (no hay
   bytes libres); la estación terrena no lo ve. ¿Hace falta transmitirlo?
 
-**P32. Parámetros del modo B que la tarea no fija.** Altura mínima de liberación 90 m y
+**P32. (SUPERADA por P58: el modo B ahora es 100 m -> 80 m.)** Parámetros del modo B
+anterior (100 m -> 50 m), que se conservan solo como historia. Altura mínima de liberación 90 m y
 h_disp = 50 + |vz| * t_lat, como se pidió. Lo demás:
 - SUPOSICIÓN: respaldo por altura `DEPLOY_RESPALDO_B_M = 40 m` (en A es 200 - 40 =
   160 m; en B, 50 - 40 = 10 m sería demasiado tarde). A ~25 m/s, de h_disp (~62 m) a
@@ -281,7 +286,7 @@ dispara de inmediato".
   ciclo siguiente: el log registra el estado 3 un ciclo y luego el 4.
 - Riesgo: en C, cualquier caída de más de ~11 cm (150 ms) dispara el servo, también por
   accidente en la mesa, y la falsa liberación de un dron también dispararía. Por eso C
-  no es para el concurso: volver a `MODO A` antes de volar.
+  no es para el concurso: volver a `MODO B` (lanzamiento real) antes de volar.
 - En el simulador, la caída desde 8 m dura ~1.3 s: el impacto llega mientras el servo
   está en el retorno a -10° del primer reintento, así que no confirma y hace los 3
   intentos (en el suelo). El pico de 2 g del impacto podría tomarse como confirmación si
@@ -538,6 +543,118 @@ entre dos paquetes con pérdidas de secuencia. La tabla agrega la columna "Log i
   simulador (suelta a 100 m, autogiro a 80 m; en curso en `tools/flight_sim.py`) y además
   la suelta a 80 m (bajo el mínimo de liberación: el reporte dice "no detectada" y aun así
   da altura máxima, caída y aterrizaje). Ambos están en `tools/tests/test_reporte_vuelo.py`.
+
+## Reglamento del lanzamiento a 100 m: modo B real (etapa 7, 23-nov-2026)
+
+Cambio de reglamento: el dron sube el CanSat a ~100 m sobre el suelo de despegue y lo
+suelta; el autogiro se despliega y la secundaria se separa a 80 m. Ya no se usan
+450 m / 200 m (quedan como modo A). El modo B pasa a ser el lanzamiento real y el de por
+defecto. Todos los números de abajo salen de `pio test -e native` con
+`tools/flight_sim.py --mode B` (ascenso de dron a 3 m/s, 20 s estacionado a 100 m con
+±0.5 m de oscilación, terminal 35 m/s).
+
+**P57. p0 en TIERRA con ascenso lento de dron (error encontrado y corregido).** El
+promedio móvil de p0 (30 s) seguía recibiendo muestras durante la subida. En un ascenso
+constante a v m/s la altura relativa se satura en ~15 s × v y la vz relativa tiende a 0:
+a 1.5 m/s la altura relativa nunca pasaba de ~22 m con vz > 1 m/s durante 3 s. Verificado
+con el firmware sin la corrección: con el vuelo `--v-climb 1.5` la placa se quedaba en
+TIERRA todo el vuelo (estados "01") y **no desplegaba**; a 2 m/s fallaba también (vz
+relativa < 1 m/s antes de cumplir los 3 s). A 6 m/s (perfil del modo A) no se notaba.
+- Corrección (`FlightCore`, `SM_P0_PAUSA_MAX_S`): en TIERRA el promedio solo recibe
+  muestras con el CanSat quieto en el suelo (|h| < 3 m y |vz| < 0.5 m/s, los mismos
+  umbrales del "p0 quieto" de P12). Fuera de eso se pausa; `STAT` muestra `p0_pausa=1`.
+  Resultado: a 1.5, 2 y 3 m/s pasa a ASCENSO a 20 m + 3 s × v (24.5, 26.0 y 29.0 m reales)
+  y se queda en ASCENSO 10 min estacionado a 100 m con p0 = el del suelo.
+- SUPOSICIÓN: si la pausa dura más de 300 s sin volver a estar quieto (p. ej. encendieron
+  el CanSat abajo y lo subieron a pie a una loma), el promedio se reanuda y sigue el nuevo
+  nivel en ~30 s, como antes. Riesgo: un dron que se queda > 5 min entre 3 y 20 m antes de
+  subir haría que p0 tome ese nivel (todas las alturas quedarían bajas, el despliegue más
+  alto: lo seguro). Recomendación: encender en el sitio de despegue y esperar 30 s quieto.
+- Cambia un poco el modo C: al subir los 8 m del tinaco el p0 ya no se arrastra (h al
+  disparo 7.9 m en vez de 6.9 m). En el modo A los números no cambian (prueba (c)).
+- Duda: el despegue sigue pidiendo vz > 1 m/s sostenida 3 s por encima de 20 m. Un dron
+  que suba a < 1.2 m/s o a tirones podría tardar en pasar a ASCENSO (no es peligroso: solo
+  arma la liberación). ¿A qué velocidad sube el dron del concurso? ¿Hace falta un
+  respaldo "h > 40 m durante 3 s, sin condición de vz"?
+- ASCENSO no tiene salida a TIERRA: un estacionamiento largo no la provoca. Probado con
+  10 min estacionado con ruido (h ±1.5 m, vz ±1 m/s, |a| = 1 ±0.4 g) y en el simulador con
+  120 s estacionado y vibración de 0.3 g por eje: sin falsas liberaciones.
+
+**P58. Parámetros del modo B (100 m -> 80 m).** En `config.h` (`DEPLOY_*_B_*`).
+- Geometría: soltado a 100 m desde el estacionamiento (vz ≈ 0), con h_disp = 80 +
+  |vz|·0.5, el disparo toca cuando el CanSat cayó ~12.5 m (~1.6 s, a ~15 m/s, h ≈ 87.5 m).
+  Con suelta a 90 m, a los ~1.0 s (5 m de caída).
+- **Margen con el detector anterior (el del modo A: baja g 150 ms + vz < -8 m/s en 1 s)**,
+  medido en native (`test_modo_b_margen_detector`): detecta **800 ms** después de soltarse
+  (h estimada 97.0 m); de ahí al cruce de h_disp quedan **820 ms / 9.5 m** con suelta a
+  100 m, y solo **220 ms / 2.0 m** con suelta a 90 m. Llegaba, pero sin margen a 90 m.
+- **Detector del modo B**: baja g 100 ms + vz < -5 m/s en los 0.6 s siguientes. Detecta
+  **490 ms** después de soltarse (h 99.0 m): margen **1130 ms / 11.5 m** a 100 m y
+  **540 ms / 4.1 m** a 90 m. La vibración no lo dispara: hacen falta 10 muestras
+  seguidas con |a| < 0.35 g (con 0.3 g de ruido por eje la probabilidad es despreciable).
+  Una caída breve del dron (0.25 s de caída libre estacionado a 100 m) da vz ≈ -2.5 m/s:
+  se descarta. Para llegar a -5 m/s el dron tendría que caer libre ~0.5 s (~1.3 m), lo
+  que en la práctica es un dron que perdió los motores. Duda: ¿el dron del concurso puede
+  hacer maniobras con caídas de ese tamaño con el CanSat colgado?
+- Criterios con barómetro en B: (b) vz < -8 m/s durante 0.2 s (A: -12 m/s 0.4 s, que con
+  suelta a 100 m llegaba a los ~1.6 s, tarde); (c) 8 m bajo la altura máxima **y** vz <
+  -5 m/s (A: 25 m, que con solo 20 m hasta 80 m no sirve; la condición de vz es para que
+  un dron que baja unos metros en el estacionamiento no cuente: un dron baja a ≤ 3-5 m/s).
+  Solo importan con el IMU muerto (con IMU vivo el criterio (a) llega antes).
+- **Liberación válida > 85 m (DEPLOY_ALT + 5 m), no 90 m.** Se propuso + 10 m = 90 m, pero
+  la altura se evalúa al inicio de la baja g y una suelta a 90 m quedaría justo en el
+  umbral: con el ruido del barómetro (±0.3 m) y el error de altura del dron se rechazaría
+  la mitad de las veces (y una suelta rechazada no despliega). Con 85 m las sueltas a 90,
+  95, 100 y 105 m se aceptan y despliegan a 79.7-80.0 m reales; una suelta a 80 m se
+  rechaza. 85 m es además el límite físico: soltado a 85 m, el cruce de h_disp llega a
+  los ~0.6 s, casi lo que tarda el detector (0.49 s). `DEPLOY_LIB_MARGEN_B_M` lo cambia.
+  Duda: ¿el dron del concurso garantiza la altura de suelta (¿±5 m?)?
+- Liberación tardía (detectada con h ya por debajo de h_disp): en B se dispara en el
+  primer ciclo de CAIDA sin esperar la compuerta (`DEPLOY_B_DISPARO_TARDIO_INMEDIATO`).
+  En A no cambia (espera la compuerta). CAIDA dura entonces un ciclo (10 ms): el estado 3
+  sigue apareciendo en el log y en la telemetría.
+- **Compuerta de 45° en B: 0.3 s** (A: 1.5 s). A ~15-17 m/s, 1.5 s de espera son ~30 m
+  de caída (no los ~11 m de una caída desde el reposo): se llegaría al respaldo de 70 m.
+  Cada 0.1 s de espera baja el despliegue ~2 m. Con 0.3 s, el peor caso (cae inclinado
+  todo el tiempo) despliega a **73.8 m** (con 0.5 s eran 69.5 m). Para que incluso ese caso
+  quede en 80 ±3 m la espera tendría que ser ≤ 0.14 s (en la práctica, sin compuerta).
+  Duda: ¿qué pasa con el autogiro si se despliega con el cuerpo a > 45°? Si no importa,
+  se puede bajar `DEPLOY_B_COMPUERTA_RESPALDO_S`.
+- **Respaldo por altura en B: 70 m.** Debe quedar por debajo del disparo nominal
+  (h_disp ≈ 87-89 m, despliegue a 80 m) para no adelantarlo, y con margen: está 10 m bajo
+  el despliegue (~0.5 s de caída a 20 m/s) y deja 70 m para que el autogiro abra (en el
+  simulador pasa de ~20 a ~10 m/s en ~10-15 m). Con la compuerta de 0.3 s casi nunca
+  actúa: solo si la caída es muy rápida (> 30 m/s) o la detección muy tardía.
+- **Sin barómetro en B: disparo 1.0 s después de la liberación detectada** (antes 1.5 s).
+  Con suelta a 100 m el autogiro actúa a **81.7 m reales**. Sin barómetro no se sabe la
+  altura de suelta: con suelta a 90 m sería ~72 m, a 105 m ~87 m. Más alto es más seguro
+  (P23). Con el barómetro muerto en TIERRA la placa pasa a ASCENSO de inmediato (P20) y
+  la liberación no tiene altura mínima.
+- IMU muerto en B: la liberación se detecta a los 1.42 s (solo barómetro) y la vz estimada
+  va retrasada (-10.9 m/s estimada contra -17.3 m/s real al disparar): el despliegue
+  estimado a bordo es 79.9 m pero el real es **74.2 m**. Mejorarlo exigiría cambiar el
+  Kalman sin IMU (`KF_ACC_SIGMA_SIN_IMU`), que también afecta al modo A; no se tocó. Duda:
+  ¿se quiere un `DEPLOY_ALT` más alto (o un t_lat mayor) cuando el IMU está muerto?
+
+**P59. Otras consecuencias del lanzamiento a 100 m.**
+- Confirmación del servo (pico de 2 g, P17): con sueltas a 90-95 m el CanSat va a
+  10-13 m/s al desplegar y el autogiro simulado no da 2 g: el servo hace los 3 intentos
+  (3.6 s) sin confirmar. A 100 m (15 m/s) sí confirma. Con el mecanismo real hay que medir
+  el pico; puede hacer falta bajar `SERVO_CONFIRMA_G` (¿1.5 g?). Hacer los 3 intentos no
+  daña nada (el autogiro ya salió).
+- Placas con `MODO A` guardado en NVS: el modo guardado manda sobre el de por defecto.
+  Una placa que se usó en A **sigue en A** hasta mandar `MODO B`. El arranque ahora avisa
+  (`# AVISO: modo A activo; el lanzamiento real es el modo B (manda MODO B)`) y el
+  checklist previo al vuelo es `MISION_BORRAR`, `BORRAR`, `MODO B`, `STAT`.
+- Reinicio en vuelo en B: la caída de 100 a 80 m dura ~2 s y el reinicio de la placa
+  ~0.8 s + 1 s de espera del Kalman (`SM_REINICIO_ESPERA_S`): un reinicio después de la
+  suelta probablemente despliega tarde (por el respaldo de 70 m o la liberación tardía).
+  No se cambió; ¿hace falta acortar la espera en B?
+- Tiempo de vuelo: de la suelta al aterrizaje ~14 s (antes ~33 s en A). El log y la TX no
+  cambian (50 Hz y 5 Hz desde la caída).
+- Los números de `docs/PRUEBAS_SISTEMAS.md` (b) a (g) se recalcularon para el modo B;
+  la guía ahora es para Linux y Windows y llama "placa TX" y "placa RX" a las que antes
+  eran "placa A" y "placa B" (para no confundirlas con los modos).
 
 ## Resueltas
 

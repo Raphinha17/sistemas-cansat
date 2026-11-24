@@ -40,6 +40,8 @@ class FlightCore {
   // Modo de despliegue (A, B o C). Se conserva en begin()/beginRecovered().
   void setDeployMode(DeployMode m) { sm_.setDeployMode(m); }
   DeployMode deployMode() const { return sm_.deployMode(); }
+  // Solo pruebas (ver StateMachine::setDeployParams).
+  void setDeployParams(DeployMode m, const DeployParams &p) { sm_.setDeployParams(m, p); }
 
   // Modo DEMO_SEPARACION (solo lo activan los entornos heltec_demo y heltec_banco)
   void setDemo(bool on) { demo_on_ = on; }
@@ -74,6 +76,8 @@ class FlightCore {
   float tiltDeg() const { return tilt_; }
   float accMagG() const { return acc_mag_; }
   float rateDps() const { return rate_; }
+  // Promedio de p0 en pausa (TIERRA con el CanSat fuera del suelo o moviéndose).
+  bool p0Paused() const { return p0_paused_; }
 
  private:
   void reset(uint32_t t_ms, bool imu_present, bool baro_present);
@@ -98,4 +102,7 @@ class FlightCore {
   uint32_t t_ms_ = 0;
   // Reinicio en vuelo
   bool recovered_ = false, att_init_pending_ = false;
+  // Pausa del promedio de p0 en TIERRA
+  bool p0_paused_ = false;
+  uint32_t t_p0_quiet_ = 0;
 };
