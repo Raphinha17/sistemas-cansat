@@ -164,3 +164,19 @@ def test_generar_reporte(tmp_path):
         assert os.path.dirname(j["carpeta"]) == str(tmp_path / "data")
         assert any("Reporte generado" in e["text"] for e in st.events)
         assert st.report_busy is False
+
+
+def test_letrero_pausado_no_tapa_el_boton():
+    """El letrero PAUSADO va dentro de la barra de herramientas (no flotando encima del
+    botón Pausar) y no intercepta clics."""
+    import re
+    html = open(os.path.join(SV.STATIC_DIR, "index.html"), encoding="utf-8").read()
+    css = open(os.path.join(SV.STATIC_DIR, "style.css"), encoding="utf-8").read()
+    js = open(os.path.join(SV.STATIC_DIR, "app.js"), encoding="utf-8").read()
+    bar = html[html.index('id="chartbar"'):]
+    bar = bar[:bar.index("</div>")]
+    assert 'id="pausetag"' in bar and 'id="pausebtn"' in bar
+    assert bar.index('id="pausetag"') < bar.index('id="pausebtn"')     # junto al botón, no encima
+    regla = re.search(r"#pausetag\s*\{([^}]*)\}", css).group(1)
+    assert "pointer-events: none" in regla and "position: absolute" not in regla
+    assert '"▶ Reanudar" : "⏸ Pausar"' in js and "hidden = !p" in js
