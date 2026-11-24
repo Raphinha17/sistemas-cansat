@@ -1,6 +1,7 @@
 import asyncio
 import csv
 import json
+import os
 
 from fastapi.testclient import TestClient
 
@@ -139,3 +140,27 @@ def test_replay_a_traves_del_servidor(tmp_path):
             time.sleep(0.1)
         s = c.get("/api/status").json()["s"]
         assert s["received"] == 120 and s["lost"] == 0 and s["invalid"] == 0
+
+
+def test_generar_reporte(tmp_path):
+    """«Generar reporte»: corre tools/reporte_vuelo.py sobre la sesión actual (sin abrir
+    la carpeta en la prueba) y lo anota en el registro de eventos."""
+    import pytest
+    pytest.importorskip("matplotlib")
+    st = SV.Station(FakeSource(), str(tmp_path / "data"), open_reports=False)
+    with TestClient(SV.create_app(st)) as c:
+        r = c.post("/api/report")
+        assert r.status_code == 404 and "toma de datos" in r.json()["error"]
+        c.post("/api/record/start")
+        estados = [1] * 5 + [2] * 10 + [3] * 3 + [4] * 2 + [5] * 6 + [6] * 12
+        alturas = [0] * 5 + [10 * k for k in range(1, 11)] + [90, 75, 60, 50, 45] \
+            + [40 - 7 * k for k in range(6)] + [0] * 12
+        feed(c, st, [_line(i, h=h, estado=e) for i, (e, h) in enumerate(zip(estados, alturas))])
+        r = c.post("/api/report")
+        assert r.status_code == 200, r.text
+        j = r.json()
+        assert j["ok"] and os.path.isdir(j["carpeta"])
+        assert "reporte.html" in j["archivos"] and "01_altura.png" in j["archivos"]
+        assert os.path.dirname(j["carpeta"]) == str(tmp_path / "data")
+        assert any("Reporte generado" in e["text"] for e in st.events)
+        assert st.report_busy is False

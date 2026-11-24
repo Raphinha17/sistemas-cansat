@@ -12,6 +12,7 @@ import argparse
 import asyncio
 import json
 import os
+import subprocess
 import sys
 import time
 from collections import deque
@@ -30,6 +31,8 @@ import gs_sources as SRC  # noqa: E402
 import telemetry as T  # noqa: E402
 
 STATIC_DIR = os.path.join(HERE, "static")
+REPORT_SCRIPT = os.path.abspath(os.path.join(HERE, "..", "tools", "reporte_vuelo.py"))
+REPORT_TIMEOUT_S = 300
 DEFAULT_DATA_DIR = os.path.join(HERE, "data")
 EVENTS_MAX = 500
 CLIENT_QUEUE_MAX = 2000
@@ -50,7 +53,7 @@ class Station:
     """Estado de la estación: fuente -> parser -> estadísticas -> grabación -> WebSocket."""
 
     def __init__(self, source, data_dir: str = DEFAULT_DATA_DIR, auto_record: bool = False,
-                 clock=time.monotonic, wall=time.time):
+                 clock=time.monotonic, wall=time.time, open_reports: bool = True):
         self.source = source
         self.stats = C.Stats()
         self.recorder = C.Recorder(data_dir)
@@ -59,6 +62,8 @@ class Station:
         self.history: deque = deque(maxlen=C.HISTORY_MAX)
         self.events: deque = deque(maxlen=EVENTS_MAX)
         self.clients: set = set()
+        self.open_reports = open_reports     # abrir la carpeta del reporte al terminar
+        self.report_busy = False
 
     # --- línea recibida de la fuente ---
     async def handle_line(self, line: str):
@@ -127,6 +132,45 @@ class Station:
                                     "text": f"Toma de datos finalizada ({info['packets']} paquetes)"}])
         return info
 
+    # --- reporte de vuelo (tools/reporte_vuelo.py) ---
+    async def make_report(self) -> tuple:
+        """Genera el reporte de la sesión actual (o la última grabada) en otro proceso, para
+        no frenar la recepción. Devuelve (código HTTP, respuesta)."""
+        csv_path = self.recorder.csv_path
+        if not csv_path or not os.path.isfile(csv_path):
+            return 404, {"error": "no hay sesión grabada: inicia la toma de datos"}
+        if self.report_busy:
+            return 409, {"error": "ya se está generando un reporte"}
+        self.report_busy = True
+        try:
+            cmd = [sys.executable, REPORT_SCRIPT, csv_path, "--json"]
+            if self.open_reports:
+                cmd.append("--abrir")
+            try:
+                res = await asyncio.to_thread(
+                    subprocess.run, cmd, capture_output=True, text=True, encoding="utf-8",
+                    errors="replace", timeout=REPORT_TIMEOUT_S)
+            except (OSError, subprocess.TimeoutExpired) as e:
+                return 500, {"error": f"no se pudo generar el reporte: {e}"}
+            info = None
+            for line in reversed(res.stdout.splitlines()):
+                if line.startswith("{"):
+                    try:
+                        info = json.loads(line)
+                    except ValueError:
+                        pass
+                    break
+            if res.returncode != 0 or not info:
+                err = (res.stderr.strip().splitlines() or ["error desconocido"])[-1]
+                return 500, {"error": f"no se pudo generar el reporte: {err}"}
+        finally:
+            self.report_busy = False
+        parcial = " (sesión en curso: datos hasta ahora)" if self.recorder.active else ""
+        await self.add_events([{"kind": "reporte", "level": "ok", "w": self.wall(),
+                                "m": self.stats.mission_s,
+                                "text": f"Reporte generado{parcial}: {info['carpeta']}"}])
+        return 200, dict(info, ok=True, csv=os.path.basename(csv_path))
+
     async def reset(self):
         self.stats.reset()
         self.history.clear()
@@ -174,6 +218,11 @@ def create_app(station: Station) -> FastAPI:
     @app.post("/api/record/stop")
     async def record_stop():
         return await station.stop_recording()
+
+    @app.post("/api/report")
+    async def api_report():
+        code, body = await station.make_report()
+        return JSONResponse(body, status_code=code)
 
     @app.post("/api/reset")
     async def api_reset():
@@ -251,6 +300,8 @@ def main(argv=None) -> int:
     ap.add_argument("--data-dir", default=DEFAULT_DATA_DIR)
     ap.add_argument("--auto-record", action="store_true",
                     help="empieza a grabar al arrancar (sin pulsar el botón)")
+    ap.add_argument("--no-abrir-reporte", action="store_true",
+                    help="«Generar reporte» no abre la carpeta (solo la crea)")
     a = ap.parse_args(argv)
 
     if a.list_ports:
@@ -272,7 +323,8 @@ def main(argv=None) -> int:
         ap.error("elige una fuente: --port COMx, --sim o --replay archivo.csv")
 
     import uvicorn
-    station = Station(source, a.data_dir, a.auto_record)
+    station = Station(source, a.data_dir, a.auto_record,
+                      open_reports=not a.no_abrir_reporte)
     print(f"Fuente: {source.name}\nDatos en: {os.path.abspath(a.data_dir)}\n"
           f"Abre http://{a.host}:{a.web_port} en el navegador (Ctrl+C para salir)")
     uvicorn.run(create_app(station), host=a.host, port=a.web_port, log_level="warning")

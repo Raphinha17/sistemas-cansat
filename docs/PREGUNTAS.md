@@ -456,6 +456,89 @@ detectó por h < h_max − 25 m a T+45 s y el disparo fue inmediato con vz = +13
   tiempos de simulación no cambian). Si se necesitara tiempo real estricto (p. ej. para
   ver el servo a su ritmo exacto), habría que reenviar más rápido que 1×.
 
+## Reporte de vuelo (etapa 6, `tools/reporte_vuelo.py`)
+
+**P50. Qué es cada instante del reporte.** Todo sale del CSV de la estación (estado,
+banderas, altura y vz que calcula la placa); el reporte no recalcula la física.
+- Despegue: última muestra a 2 m o menos del suelo antes del primer paquete de ASCENSO
+  (la placa entra a ASCENSO ya a >20 m).
+- Liberación / despliegue / fin del despliegue: primer paquete con estado CAÍDA (o bandera
+  de liberación) / DESPLIEGUE (o bandera de disparo) / DESCENSO. Un paquete suelto con
+  un estado raro no cuenta: se exige que el siguiente también lo cumpla. Sin paquete de
+  DESCENSO, el fin del despliegue se toma 1 s después del disparo.
+- La hora es la de la PC al recibir el paquete. Con pérdidas, el instante real puede ser
+  hasta un intervalo de transmisión antes (0.2 s a 5 Hz); con `--log` se ve el exacto.
+- Aterrizaje (toque): primera muestra, después del despliegue, a 2 m o menos del suelo
+  (suelo = mediana de la altura en ATERRIZADO, por si p0 derivó); si hay un pico de
+  aceleración >= 2 g entre 3 s antes y 1.5 s después, se usa el pico. Sin ninguna de las
+  dos, el primer paquete de ATERRIZADO. El estado ATERRIZADO llega ~1 s después del toque
+  (reposo); se lista aparte en "Eventos".
+- Duración de la misión: despegue -> aterrizaje. "Tiempo de descenso": se dan los dos,
+  con autogiro (fin del despliegue -> aterrizaje) y desde la liberación.
+- Duda: ¿la duración de la misión que piden los jueces es otra (p. ej. desde el
+  encendido o hasta el fin de la transmisión)?
+
+**P51. Velocidad de descenso con autogiro (8 a 12 m/s).** Media y mediana de -vz de los
+paquetes entre el fin del despliegue (primer DESCENSO) y el aterrizaje, como se pidió.
+"Dentro" = media y mediana en [8, 12] m/s; también se da el % de muestras en la banda y
+la media altura/tiempo (útil si los jueces cronometran).
+- Duda: los primeros ~1-2 s de DESCENSO el autogiro aún frena (vz de -30 a -10 m/s en la
+  sesión del 19-nov 17:27): suben la media (10.7 m/s contra mediana 10.0). ¿Se quiere
+  descartar el primer segundo o 2 s de DESCENSO? Hoy no se descarta nada.
+
+**P52. Velocidad vertical máxima en caída.** Máximo de -vz entre la liberación y el fin
+del despliegue (la caída es más rápida justo antes de que abra el autogiro). Sin
+liberación detectada (p. ej. soltado bajo la altura mínima), entre la altura máxima y el
+aterrizaje.
+
+**P53. Impacto.** Módulo máximo de la aceleración entre 1 s antes y 2 s después del toque.
+Con la telemetría (2 a 5 Hz) casi nunca se captura el pico (dura ~30 ms): en los vuelos
+simulados da ~1 g contra ~8 g en el log interno a 50 Hz. Para el número real usar `--log`
+(columna "Log interno"). El sensor satura en ±16 g (MPU6500) y el paquete en ±32.767 g.
+
+**P54. Transmisión tras aterrizar y enlace.** Segundos entre el toque y el último paquete
+grabado; "sí" si son >= 10 s. Si la grabación se detiene antes, cuenta lo grabado (no lo
+transmitido). Recibidos/esperados/pérdida: por salto de secuencia, igual que la estación y
+`tools/resumen_enlace.py` (los duplicados no cuentan; un salto hacia atrás es reinicio,
+no pérdida). Hueco de enlace = más de 3 s sin paquetes (igual que "enlace perdido" en la
+estación); se sombrea con rayas. Las pérdidas más cortas se ven en la gráfica de
+paquetes perdidos por intervalo de 5 s.
+
+**P55. Datos ruidosos o faltantes.** No se inventan datos: lo que no sirve queda como
+hueco y se cuenta en "Calidad de los datos".
+- Filas ilegibles o con estado fuera de 0..6: se saltan. Duplicados (misma secuencia y
+  t_ms): se quitan. Reinicio de la placa (t_ms retrocede): el tiempo continúa, como en
+  la estación.
+- Presión fuera de 300-1100 hPa (0 sin sensor) o con bandera de fallo de barómetro: no se
+  grafican presión ni temperatura. Aceleración 0,0,0 o bandera de fallo de IMU: sin
+  aceleración ni actitud. RSSI >= 0 dBm (la repetición pone 0 si faltaba): sin dato.
+  Batería 0 V: no medida.
+- |vz| > 80 m/s (estimador corrompido, p. ej. vz saturada a ±327.67 en la prueba de
+  simulación de P49): se descartan vz y altura de esa muestra.
+- Altura: se descarta un pico aislado (>30 m de la mediana de 5 muestras) y todo salto
+  más rápido que 80 m/s + 15 m respecto de la última altura buena; si llegan 3 muestras
+  seguidas coherentes entre sí se aceptan (tras un hueco largo la altura cambia mucho de
+  verdad). Las descartadas se marcan con una x gris en la gráfica de altura.
+- La altura máxima es la de la altura ya limpia. Si queda después de la liberación (la
+  sesión de P49), el reporte avisa que la altura de la placa no es coherente.
+- SUPOSICIÓN: 80 m/s (más del doble de la velocidad terminal, ~35 m/s) como límite
+  físico. Con un vuelo real más rápido habría que subirlo (`VZ_FISICA`, `SALTO_V`).
+
+**P56. Log interno (`--log`).** No había herramienta que pase el `DUMP` a CSV, así que se
+aceptan las dos formas: el texto tal cual (líneas hex de 32 B; los registros de evento
+`0xEE` se saltan) o un CSV con los nombres de campo del paquete. Se alinea con la estación
+por los `t_ms` que aparecen en ambos (el log guarda los mismos paquetes que se
+transmiten); sin coincidencias, se supone el mismo arranque de la placa. "No recibido" =
+registros del log que caen antes del primer paquete, después del último, en un hueco o
+entre dos paquetes con pérdidas de secuencia. La tabla agrega la columna "Log interno"
+(mismos cálculos, sin los de enlace).
+- Duda: si la placa reinició entre el vuelo y el `DUMP`, el log puede tener registros de
+  más de un arranque; el reporte los pone en un solo eje (el tiempo continúa).
+- Duda: la prueba "modo B con 100 m / 80 m" se interpretó como el modo B actual del
+  simulador (suelta a 100 m, autogiro a 80 m; en curso en `tools/flight_sim.py`) y además
+  la suelta a 80 m (bajo el mínimo de liberación: el reporte dice "no detectada" y aun así
+  da altura máxima, caída y aterrizaje). Ambos están en `tools/tests/test_reporte_vuelo.py`.
+
 ## Resueltas
 
 **P2. Reed y enclavamiento (DECISIÓN DE HARDWARE).** Ya no se usa interruptor reed ni

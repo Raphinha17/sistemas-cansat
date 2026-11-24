@@ -398,6 +398,24 @@ $("exportbtn").onclick = async () => {
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 2000);
 };
+$("reportbtn").onclick = async () => {
+  const btn = $("reportbtn");
+  if (btn.disabled) return;
+  btn.disabled = true;
+  const label = btn.textContent;
+  btn.textContent = "Generando…";
+  try {
+    const r = await fetch("/api/report", { method: "POST" });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) alert(j.error || "No se pudo generar el reporte");
+    else btn.title = "Último reporte: " + j.carpeta;   // el registro de eventos muestra la carpeta
+  } catch (e) {
+    alert("No se pudo generar el reporte: " + e);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = label;
+  }
+};
 $("resetbtn").onclick = async () => {
   if (confirm("¿Reiniciar estadísticas, gráficas y eventos? (No borra los archivos grabados)")) await post("/api/reset");
 };

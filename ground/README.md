@@ -41,6 +41,11 @@ disponible, la interfaz lo avisa y el servidor reintenta cada 2 s.
   (variables decodificadas + RSSI, SNR y hora) y `.raw.txt` (las líneas tal como llegaron).
   Lo que llega antes de pulsar INICIAR se ve en pantalla pero no se guarda.
 - **Exportar CSV**: descarga el CSV de la sesión actual (o de la última grabada).
+- **Generar reporte**: corre `tools/reporte_vuelo.py` sobre la sesión actual (o la última
+  grabada), deja el reporte en `ground/data/reporte_<fecha>/` y abre esa carpeta en el
+  explorador. Tarda unos segundos (el botón dice *Generando…*); la recepción no se detiene.
+  Con la grabación en curso, el reporte lleva los datos hasta ese momento. El registro de
+  eventos muestra la carpeta. `--no-abrir-reporte` solo la crea, sin abrirla.
 - **Gráficas**: ventanas de 30 s, 2 min, 5 min o todo; **Pausar** (tecla **P**) congela las
   gráficas para revisarlas (el cursor muestra los valores); las tarjetas siguen en vivo.
 - **Modo pantalla de video**: botón *VIDEO* (esquina del encabezado) o tecla **V**. Oculta
@@ -54,13 +59,37 @@ Poner el archivo del equipo en **`ground/static/logo.png`**. Mientras no exista 
 muestra un marcador amarillo que dice dónde ponerlo. Conviene un PNG con fondo
 transparente, de proporción ancha y unos 400x120 px o más.
 
+## Reporte de vuelo
+Gráficas PNG (200 dpi, fases sombreadas por estado) de altura, velocidad vertical (banda
+de 8 a 12 m/s en el descenso), presión y temperatura, aceleración, actitud y enlace, más
+la tabla de números en `reporte.md` y `reporte.html` (un solo archivo, con las imágenes
+adentro) y `resumen.json`. Se guarda en `reporte_<fecha de la sesión>/`, junto al CSV.
+Desde PowerShell, en la raíz del repositorio:
+```powershell
+# Sesión más reciente de ground\data (la última que tenga paquetes)
+.\.venv\Scripts\python tools\reporte_vuelo.py
+
+# Una sesión concreta, con PDF de dos hojas, abriendo la carpeta al terminar
+.\.venv\Scripts\python tools\reporte_vuelo.py ground\data\sesion_20261119_172700.csv --pdf --abrir
+
+# Con el log interno de la placa (DUMP) superpuesto: marca lo que la estación no recibió
+.\.venv\Scripts\python tools\reporte_vuelo.py ground\data\sesion_20261119_172700.csv --log vuelo_dump.txt
+```
+`--log` acepta el texto tal como lo imprime `DUMP` (copiado del monitor serial, con o sin
+las líneas `LOG_INICIO`/`LOG_FIN`) o un CSV con las columnas del paquete (`t_ms`,
+`altura_m`, ...). Otras opciones: `--salida CARPETA` (dónde crear `reporte_<fecha>/`),
+`--dpi 300`. Al terminar imprime la tabla en la consola. Criterios de cada número (qué es
+"aterrizaje", qué muestras entran en la velocidad de descenso, etc.):
+`docs/PREGUNTAS.md` P50 a P56.
+
 ## API REST
 `GET /api/status` · `POST /api/record/start` · `POST /api/record/stop` ·
-`GET /api/export.csv` · `POST /api/reset` · WebSocket `/ws`.
+`GET /api/export.csv` · `POST /api/report` · `POST /api/reset` · WebSocket `/ws`.
 
 ## Pruebas
 ```powershell
 .\.venv\Scripts\python -m pytest ground\tests -q
+.\.venv\Scripts\python -m pytest tools\tests\test_reporte_vuelo.py -q    # cálculos del reporte
 ```
 Cubren el parser de líneas, la pérdida de paquetes, la altura máxima, el enlace perdido,
 la grabación del CSV y el servidor (REST y WebSocket). No se puede probar el puerto serie
