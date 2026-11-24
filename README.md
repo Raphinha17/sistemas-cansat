@@ -190,13 +190,3 @@ vuelo o prueba se ejecutan `MISION_BORRAR`, `BORRAR`, `MODO B` y `STAT`** (check
 
 Otros documentos: [protocol/packet.md](protocol/packet.md) (paquete de 32 bytes),
 [firmware/README.md](firmware/README.md) y [ground/README.md](ground/README.md).
-
-## Cómo contribuir
-
-El equipo trabaja directamente sobre `main`:
-
-1. `git pull` antes de empezar, para partir de la versión más reciente.
-2. Hacer el cambio y correr las pruebas (sección *Uso rápido*); deben pasar todas.
-3. `git add` de los archivos modificados, `git commit` con un mensaje claro (qué cambió y
-   por qué) y `git push` a `main`.
-4. Las dudas o suposiciones nuevas se anotan en `docs/PREGUNTAS.md`.
