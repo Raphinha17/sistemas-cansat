@@ -31,6 +31,12 @@ DeployParams deployParams(DeployMode m) {
       p.immediate = true;
       p.name = "tinaco";
       break;
+    case DEPLOY_MODE_D:
+      // Igual que C (misma detección de caída libre y mismos eventos), pero sin servo.
+      p.immediate = true;
+      p.no_servo = true;
+      p.name = "tinaco: solo carga primaria, SIN disparo";
+      break;
     default:  // A
       p.deploy_alt_m = DEPLOY_ALT_A_M;
       p.release_min_m = DEPLOY_ALT_A_M + DEPLOY_LIB_MARGEN_A_M;
@@ -43,7 +49,7 @@ DeployParams deployParams(DeployMode m) {
 }
 
 char deployModeChar(DeployMode m) {
-  return m == DEPLOY_MODE_B ? 'B' : m == DEPLOY_MODE_C ? 'C' : 'A';
+  return m == DEPLOY_MODE_B ? 'B' : m == DEPLOY_MODE_C ? 'C' : m == DEPLOY_MODE_D ? 'D' : 'A';
 }
 
 bool deployModeFromChar(char c, DeployMode &out) {
@@ -51,6 +57,7 @@ bool deployModeFromChar(char c, DeployMode &out) {
     case 'A': case 'a': out = DEPLOY_MODE_A; return true;
     case 'B': case 'b': out = DEPLOY_MODE_B; return true;
     case 'C': case 'c': out = DEPLOY_MODE_C; return true;
+    case 'D': case 'd': out = DEPLOY_MODE_D; return true;
     default: return false;
   }
 }
@@ -118,6 +125,13 @@ void StateMachine::enter(uint8_t s, uint32_t t) {
 }
 
 void StateMachine::fire(uint32_t t, bool backup) {
+  if (prm_.no_servo) {
+    // Modo D: la máquina recorre CAIDA -> DESPLIEGUE -> DESCENSO como en C, pero sin
+    // bandera de disparo, sin evento de disparo y sin arrancar la secuencia del servo.
+    t_fire_ = t;
+    enter(ST_DESPLIEGUE, t);
+    return;
+  }
   latched_ |= FLAG_DISPARO;
   if (backup) latched_ |= FLAG_DISPARO_RESPALDO;
   t_fire_ = t;
@@ -173,6 +187,10 @@ void StateMachine::step(const SmInput &in) {
         stepCaida(in);
         break;
       case ST_DESPLIEGUE:
+        if (prm_.no_servo) {  // modo D: no hay secuencia que esperar
+          enter(ST_DESCENSO, t_);
+          break;
+        }
         seq_.step(t_, imu_ok_ && in.acc_g > SERVO_CONFIRMA_G);
         if (seq_.done()) enter(ST_DESCENSO, t_);
         break;
@@ -195,8 +213,11 @@ void StateMachine::step(const SmInput &in) {
 
   // Servo: sin energía hasta CAIDA; en CAIDA alimentado en bloqueo; en DESPLIEGUE la
   // secuencia; después, sin energía.
+  // Modo D: nunca hay energía ni orden al servo.
   ServoCmd sc;
-  if (state_ == ST_CAIDA) {
+  if (prm_.no_servo) {
+    // sc queda sin energía
+  } else if (state_ == ST_CAIDA) {
     sc.power = true;
     sc.angle_deg = SERVO_ANG_BLOQUEO_DEG;
   } else if (state_ == ST_DESPLIEGUE) {

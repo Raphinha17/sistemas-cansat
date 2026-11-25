@@ -46,9 +46,12 @@ class FlightCore {
   // Modo DEMO_SEPARACION (solo lo activan los entornos heltec_demo y heltec_banco)
   void setDemo(bool on) { demo_on_ = on; }
   bool demoEnabled() const { return demo_on_; }
-  void demoArm(uint32_t t_ms) { if (demo_on_) demo_.arm(t_ms); }
+  // En el modo D (sin servo) el demo no arma: tampoco debe haber disparo por ahí.
+  void demoArm(uint32_t t_ms) { if (demo_on_ && !sm_.deployParamsNow().no_servo) demo_.arm(t_ms); }
   void demoDisarm() { demo_.disarm(); }
-  void demoToggle(uint32_t t_ms) { if (demo_on_) demo_.toggle(t_ms); }
+  void demoToggle(uint32_t t_ms) {
+    if (demo_on_ && !sm_.deployParamsNow().no_servo) demo_.toggle(t_ms);
+  }
   const DemoSeparation &demo() const { return demo_; }
 
   // --- Salidas del último ciclo ---

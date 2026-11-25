@@ -32,7 +32,7 @@
 //   BORRAR        borra el log
 //   MISION        muestra el registro de misión guardado en NVS
 //   MISION_BORRAR borra el registro de misión y reinicia la placa
-//   MODO          muestra el modo de despliegue; MODO A|B|C lo cambia (estados 0 y 1)
+//   MODO          muestra el modo de despliegue; MODO A|B|C|D lo cambia (estados 0 y 1)
 //   SIM_INICIO    entra al modo simulación (o lo reinicia de cero) sin esperar sensores
 //   SIM_FIN       sale del modo simulación (vuelve a los sensores y recalibra)
 //   SIM_PROXIMA   responde "SIM_PROXIMA t_ms": próxima línea SIM esperada (sim_serial.py)
@@ -292,9 +292,10 @@ static void printRecord(const MissionRecord &r) {
 static void printMode(DeployMode m) {
   const DeployParams p = deployParams(m);
   if (p.immediate) {
-    Serial.printf("despliegue=%c [%s] disparo al detectar la caida libre (baja g %.0f ms), "
+    Serial.printf("despliegue=%c [%s] %s al detectar la caida libre (baja g %.0f ms), "
                   "sin altura minima ni compuerta\n",
-                  deployModeChar(m), p.name, p.lowg_t_s * 1000);
+                  deployModeChar(m), p.name, p.no_servo ? "solo registra (servo inhibido)" : "disparo",
+                  p.lowg_t_s * 1000);
     return;
   }
   Serial.printf("despliegue=%c [%s] liberacion valida > %.0f m, autogiro a %.0f m "
@@ -406,7 +407,7 @@ static bool handleCommand(const String &cmd) {
     String arg = cmd.substring(5);
     arg.trim();
     if (arg.length() != 1 || !deployModeFromChar(arg[0], m)) {
-      Serial.println("ERR uso: MODO A|B|C");
+      Serial.println("ERR uso: MODO A|B|C|D");
     } else if (pub_state > ST_TIERRA) {
       Serial.println("ERR el modo solo se cambia en los estados 0 y 1 (en tierra)");
     } else if ((uint8_t)m == pub_mode) {
@@ -468,7 +469,7 @@ static bool handleCommand(const String &cmd) {
 
 static void printHelp() {
   Serial.println("Comandos: TX1 TX5 STAT DUMP BORRAR MISION MISION_BORRAR MISION_PRUEBA "
-                 "MODO [A|B|C] SIM_INICIO SIM_FIN SIM_PROXIMA ARMAR DESARMAR | lineas SIM,... "
+                 "MODO [A|B|C|D] SIM_INICIO SIM_FIN SIM_PROXIMA ARMAR DESARMAR | lineas SIM,... "
                  "(docs/sim_input.md)");
 }
 

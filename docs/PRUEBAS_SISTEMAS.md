@@ -417,6 +417,19 @@ placa se queda en ASCENSO (`liberaciones_descartadas=2`) y no dispara.
 > valió.** `sim_rx=17318 sim_invalidas=137` de 19 391 enviadas; disparo a T+45 s con
 > `h=238.5 vz=+130.0`. Causa: bytes perdidos en el puerto serie y líneas pegadas (P49).
 
+### (d0) Cambiar de modo con un script (sin red)
+```bash
+tools/modo_dron.sh [PUERTO]            # MODO B
+tools/tinaco_separacion.sh [PUERTO]    # MODO C: el servo SÍ disparará
+tools/tinaco_primaria.sh [PUERTO]      # MODO D: tinaco solo carga primaria, el servo NO disparará
+```
+Mandan `MODO X` y confirman con `STAT` que diga `despliegue=X`; imprimen el aviso en grande
+(verde) o fallan en rojo con código distinto de 0. Sin puerto, prueban cada `/dev/ttyUSB*`
+con `STAT` y usan el único que responde `estado=`; con cero o varios avisan y no hacen nada.
+Recuerda que el modo solo cambia en los estados 0 y 1 y **queda guardado**: **antes del
+vuelo con el dron corre `tools/modo_dron.sh`**. En modo D el servo no se mueve ni siquiera
+con `ARMAR` o el botón PRG; verifícalo en `STAT` (`servo=OFF intentos=0 disparos=0`).
+
 ### (d) Modo C (tinaco)
 **Objetivo:** disparo inmediato al detectar la caída libre, sin altura mínima ni compuerta.
 ```bash

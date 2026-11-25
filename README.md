@@ -136,14 +136,27 @@ genera con el botón *Generar reporte* de la estación terrena.
 |---|---|---|
 | **B** | **Vuelo real** (por defecto) | ~100 m → 80 m |
 | **A** | Reglamento anterior | ~450 m → 200 m |
-| **C** | Pruebas con tinaco: dispara al detectar la caída libre, sin altura mínima | — |
+| **C** | Tinaco **con separación**: dispara al detectar la caída libre, sin altura mínima | — |
+| **D** | Tinaco **solo carga primaria**: misma detección que C, pero el servo **nunca** dispara ni recibe energía | — |
 
-El modo se cambia con `MODO A`, `MODO B` o `MODO C` (solo en los estados 0 y 1), se guarda
+El modo se cambia con `MODO A`, `MODO B`, `MODO C` o `MODO D` (solo en los estados 0 y 1), se guarda
 en la memoria de la placa y **persiste entre reinicios**: una placa que quedó en A sigue en
 A hasta mandar `MODO B`. Para cambiarlo y confirmarlo:
 ```bash
 python tools/cmd_serial.py "MODO B" STAT      # STAT muestra «despliegue=B ...» con sus umbrales
 ```
+En el modo D, `STAT` dice `despliegue=D [tinaco: solo carga primaria, SIN disparo]`.
+
+**Scripts de un solo paso** (sin red; cambian el modo y lo confirman con `STAT`):
+```bash
+tools/modo_dron.sh [PUERTO]            # MODO B (el dron, vuelo real)
+tools/tinaco_separacion.sh [PUERTO]    # MODO C: «TINACO CON SEPARACIÓN: el servo SÍ disparará»
+tools/tinaco_primaria.sh [PUERTO]      # MODO D: «TINACO SOLO CARGA PRIMARIA: el servo NO disparará»
+```
+Sin argumento, cada script prueba los `/dev/ttyUSB*` mandando `STAT` y usa el que responde con
+`estado=`; si no hay ninguno o hay varios, avisa y sale sin hacer nada. Si el `STAT` no
+confirma el modo, fallan en rojo con código de salida distinto de 0 (el modo solo cambia en
+los estados 0 y 1).
 
 ## Comandos de la placa (serial, 115200 baudios)
 

@@ -661,6 +661,17 @@ relativa < 1 m/s antes de cumplir los 3 s). A 6 m/s (perfil del modo A) no se no
   la guía ahora es para Linux y Windows y llama "placa TX" y "placa RX" a las que antes
   eran "placa A" y "placa B" (para no confundirlas con los modos).
 
+**P60. Modo D (tinaco solo carga primaria).** Misma detección que C; servo inhibido.
+- SUPOSICIÓN: la máquina sigue recorriendo CAIDA → DESPLIEGUE → DESCENSO → ATERRIZADO
+  (mismos eventos de estado en telemetría y log), pero DESPLIEGUE dura un ciclo y no hay
+  secuencia de servo. Tampoco hay energía al servo en CAIDA (en C sí se alimenta en
+  bloqueo): "salida del servo inhibida" se tomó como ninguna energía ni PWM.
+- Sin bandera de disparo, el reinicio en vuelo en DESPLIEGUE tampoco dispara en D.
+- El demo (`ARMAR`, botón PRG) no arma en D, para que no haya disparo por ese camino.
+- Un modo D guardado en NVS **persiste**: antes del vuelo real correr `tools/modo_dron.sh`.
+- Duda: ¿se quiere que el arranque avise (`# AVISO`) también cuando el modo guardado es D,
+  como ya hace para A y C? Hoy avisa con la misma regla (modo distinto de B).
+
 ## Resueltas
 
 **P2. Reed y enclavamiento (DECISIÓN DE HARDWARE).** Ya no se usa interruptor reed ni

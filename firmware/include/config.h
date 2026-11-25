@@ -191,7 +191,7 @@
 #define SM_NVS_MIN_PERIODO_S 1.0f    // ... como máximo una vez por este periodo
 
 // ---------------------------------------------------------------------------
-// Modos de despliegue (DEPLOY_MODE). Se elige con el comando serial "MODO A|B|C", se
+// Modos de despliegue (DEPLOY_MODE). Se elige con el comando serial "MODO A|B|C|D", se
 // guarda en NVS y se ve en STAT, en el arranque y en el log. Solo se puede cambiar en los
 // estados 0 y 1.
 //  B: LANZAMIENTO REAL (reglamento vigente, por defecto): el dron sube a ~100 m sobre el
@@ -200,6 +200,8 @@
 //  A: reglamento anterior: liberación a ~450 m, autogiro a 200 m.
 //  C: tinaco: dispara en cuanto detecta la caída libre (sin altura mínima, sin h_disp
 //     ni compuerta de ángulo). Ver PREGUNTAS P33.
+//  D: tinaco solo carga primaria: igual que C (misma detección y mismos eventos) pero con
+//     la salida del servo inhibida: ni energía, ni disparo, ni bandera de disparo.
 // En A y B: liberación válida solo si h > DEPLOY_ALT + DEPLOY_LIB_MARGEN_x_M (A = 240 m,
 // B = 85 m) y h_disp = DEPLOY_ALT + |vz| * SM_T_LATENCIA_S.
 // ---------------------------------------------------------------------------

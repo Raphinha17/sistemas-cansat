@@ -471,7 +471,10 @@ static void test_modos_parametros() {
   TEST_ASSERT_TRUE(deployModeFromChar('b', m));
   TEST_ASSERT_EQUAL(DEPLOY_MODE_B, m);
   TEST_ASSERT_EQUAL('C', deployModeChar(DEPLOY_MODE_C));
-  TEST_ASSERT_FALSE(deployModeFromChar('D', m));
+  TEST_ASSERT_TRUE(deployModeFromChar('d', m));
+  TEST_ASSERT_EQUAL(DEPLOY_MODE_D, m);
+  TEST_ASSERT_EQUAL('D', deployModeChar(DEPLOY_MODE_D));
+  TEST_ASSERT_FALSE(deployModeFromChar('E', m));
   TEST_ASSERT_EQUAL(DEPLOY_MODE_B, deployModeDefault());  // lanzamiento real por defecto
   // El modo es configuración: sobrevive a begin() y a beginRecovered()
   StateMachine sm;
@@ -868,6 +871,75 @@ static void test_modo_c_desde_tierra() {
   TEST_ASSERT_EQUAL(ST_TIERRA, a.state());
 }
 
+static void test_modo_d_nunca_dispara() {
+  // D = C sin servo: misma detección (caída libre en TIERRA, 150 ms, sin altura ni
+  // compuerta) y mismos cambios de estado, pero sin energía al servo, sin bandera de
+  // disparo, sin evento de disparo y sin intentos, durante toda la caída.
+  StateMachine sm;
+  sm.setDeployMode(DEPLOY_MODE_D);
+  TEST_ASSERT_TRUE(sm.deployParamsNow().no_servo && sm.deployParamsNow().immediate);
+  TEST_ASSERT_EQUAL('D', deployModeChar(sm.deployMode()));
+  sm.begin(0);
+  uint32_t t = 0;
+  for (; t < 2000; t += 10) sm.step(base(t));
+  TEST_ASSERT_EQUAL(ST_TIERRA, sm.state());
+  bool froze = false, fire_ev = false, power = false, state4 = false, state5 = false;
+  uint8_t flags_or = 0, intentos = 0;
+  float h = 5, vz = -0.5f;
+  // Caída libre 2 s con tilt 90 (la compuerta no se aplica), descenso lento y reposo
+  for (int i = 0; i < 2000; i++, t += 10) {
+    SmInput in = base(t);
+    if (i < 200) {
+      in.acc_g = 0.1f;
+      vz -= 0.098f;
+      h += vz * 0.01f;
+      in.tilt_deg = 90;
+    } else if (i < 400) {
+      vz = -10;
+      h += vz * 0.01f;
+    } else {
+      vz = 0;
+      h = 0;
+    }
+    in.h = h < 0 ? 0 : h;
+    in.vz = vz;
+    sm.step(in);
+    froze |= sm.out().ev_freeze_p0;
+    fire_ev |= sm.out().ev_fire;
+    power |= sm.out().servo.power;
+    flags_or |= sm.out().flags;
+    intentos |= sm.out().servo_intentos;
+    state4 |= sm.state() == ST_DESPLIEGUE;
+    state5 |= sm.state() == ST_DESCENSO;
+  }
+  TEST_ASSERT_TRUE(froze);                       // misma detección y mismo evento que C
+  TEST_ASSERT_TRUE(flags_or & FLAG_LIBERACION);  // la liberación sí se registra
+  TEST_ASSERT_TRUE(state4 && state5);            // mismos estados que C
+  TEST_ASSERT_FALSE(fire_ev);                    // ningún disparo
+  TEST_ASSERT_FALSE(power);                      // el servo nunca recibe energía
+  TEST_ASSERT_EQUAL(0, flags_or & (FLAG_DISPARO | FLAG_DISPARO_RESPALDO));
+  TEST_ASSERT_EQUAL(0, intentos);                // sin intentos ni confirmación
+  TEST_ASSERT_FALSE(sm.out().servo_confirmado);
+  TEST_ASSERT_EQUAL(ST_ATERRIZADO, sm.state());  // la misión termina normal
+  // Con el mismo tipo de caída, el modo C sí dispara (el D no es un C roto)
+  StateMachine c;
+  c.setDeployMode(DEPLOY_MODE_C);
+  c.begin(0);
+  for (t = 0; t < 2000; t += 10) c.step(base(t));
+  bool c_fire = false, c_power = false;
+  for (int i = 0; i < 60; i++, t += 10) {
+    SmInput in = base(t);
+    in.h = 5;
+    in.vz = -1;
+    in.acc_g = 0.1f;
+    in.tilt_deg = 90;
+    c.step(in);
+    c_fire |= c.out().ev_fire;
+    c_power |= c.out().servo.power;
+  }
+  TEST_ASSERT_TRUE(c_fire && c_power);
+}
+
 // ---------------------------------------------------------------------------
 // Botón PRG y LED del modo demo
 // ---------------------------------------------------------------------------
@@ -957,6 +1029,7 @@ int main(int, char **) {
   RUN_TEST(test_despegue_lento_sm);
   RUN_TEST(test_modo_b_sin_baro);
   RUN_TEST(test_modo_c_desde_tierra);
+  RUN_TEST(test_modo_d_nunca_dispara);
   RUN_TEST(test_toque_largo);
   RUN_TEST(test_demo_toggle_y_led);
   return UNITY_END();

@@ -84,13 +84,23 @@ scripts/     scripts de PlatformIO
 | **B** (por defecto, lanzamiento real: suelta ~100 m) | h > 85 m | baja g 100 ms + vz < -5 m/s en 0.6 s; o vz < -8 m/s 0.2 s; o 8 m bajo h_max bajando a > 5 m/s | h ≤ 80 + \|vz\|·0.5 y compuerta 45°; inmediato si la liberación llega tarde | compuerta 0.3 s, 70 m; sin baro 1.0 s |
 | **A** (reglamento anterior) | h > 240 m (~450 m) | baja g 150 ms + vz < -8 m/s en 1 s; o vz < -12 m/s 0.4 s; o 25 m bajo h_max | h ≤ 200 + \|vz\|·0.5 y compuerta 45° | compuerta 1.5 s, 160 m; sin baro 7 s |
 | **C** (tinaco) | caída libre 150 ms, sin altura (también en TIERRA) | — | inmediato, sin compuerta | — |
+| **D** (tinaco, solo carga primaria) | igual que C | — | **ninguno**: servo inhibido (sin energía, sin intentos, sin bandera de disparo) | — |
 
-`MODO A|B|C` lo cambia (solo en estados 0 y 1), se guarda en NVS y queda en el log
+`MODO A|B|C|D` lo cambia (solo en estados 0 y 1), se guarda en NVS y queda en el log
 (registro de evento en cada arranque y cambio). `MODO`, `STAT` y el arranque muestran el
 modo activo y sus umbrales; el arranque avisa (`# AVISO: modo A activo...`) si el modo
 guardado no es el B. **Una placa que ya tenía `MODO A` guardado sigue en A hasta mandar
 `MODO B`.** Parámetros en `config.h` (`DEPLOY_*`); dudas en `docs/PREGUNTAS.md` P31-P33 y
 P57-P59.
+
+**Modo D** (tinaco solo carga primaria): recorre CAIDA → DESPLIEGUE → DESCENSO → ATERRIZADO
+con la misma detección que C y los mismos eventos de estado en la telemetría y el log, pero
+`ServoCmd` queda siempre sin energía, no se arranca la secuencia del servo (0 intentos, sin
+confirmación), `FLAG_DISPARO` y `FLAG_DISPARO_RESPALDO` nunca se encienden y el demo
+(`ARMAR`, botón PRG) no arma. `STAT` imprime `despliegue=D [tinaco: solo carga primaria,
+SIN disparo]`. Prueba nativa: `test_modo_d_nunca_dispara` (`test_state_machine`). Scripts
+para ponerlo y confirmarlo: `tools/tinaco_primaria.sh` (y `tinaco_separacion.sh` para C,
+`modo_dron.sh` para B).
 
 p0 en TIERRA: el promedio móvil solo toma muestras con el CanSat quieto en el suelo
 (|h| < 3 m y |vz| < 0.5 m/s); al levantarlo se pausa (hasta 300 s) para que un ascenso
@@ -100,7 +110,7 @@ lento de dron no lo arrastre (`STAT`: `p0_pausa=1`). P57.
 `TX1` (según el estado, por defecto), `TX5` (5 Hz en tierra, pruebas), `STAT`, `DUMP`
 (log en hex), `BORRAR`, `MISION` (registro de NVS), `MISION_BORRAR` (borra la misión y
 reinicia), `MISION_PRUEBA` (guarda una misión FALSA en curso, para probar el reinicio en
-vuelo sin volar), `MODO [A|B|C]`, `SIM_INICIO` (entra al modo simulación, o lo reinicia de
+vuelo sin volar), `MODO [A|B|C|D]`, `SIM_INICIO` (entra al modo simulación, o lo reinicia de
 cero, sin depender de los sensores), `SIM_FIN`, `SIM_PROXIMA` (próxima línea SIM esperada),
 y en `heltec_demo`/`heltec_banco`: `ARMAR`, `DESARMAR`. Las líneas `SIM,...` también activan
 el modo simulación (solo en estados 0 y 1). Con CRC (`SIM,...*HHHH`, como las manda

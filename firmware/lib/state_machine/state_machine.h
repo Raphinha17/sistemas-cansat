@@ -25,14 +25,18 @@
 static constexpr uint32_t kMissionMagic = 0x314E534D;  // "MSN1"
 
 // Modos de despliegue (DEPLOY_MODE, ver config.h). El lanzamiento real es B (por defecto).
-enum DeployMode : uint8_t { DEPLOY_MODE_A = 0, DEPLOY_MODE_B = 1, DEPLOY_MODE_C = 2 };
+// D: tinaco solo carga primaria (detección del C, pero con la salida del servo inhibida).
+enum DeployMode : uint8_t {
+  DEPLOY_MODE_A = 0, DEPLOY_MODE_B = 1, DEPLOY_MODE_C = 2, DEPLOY_MODE_D = 3
+};
 
 struct DeployParams {
   float deploy_alt_m = 0;     // DEPLOY_ALT: h_disp = deploy_alt_m + |vz| * SM_T_LATENCIA_S
   float release_min_m = 0;    // liberación válida solo por encima (DEPLOY_ALT + margen)
   float backup_alt_m = 0;     // respaldo: por debajo de esta altura se dispara siempre
   float t_fire_no_baro_s = 0; // baro muerto: disparo por tiempo desde la liberación
-  bool immediate = false;     // C (tinaco): disparo al detectar la caída libre
+  bool immediate = false;     // C y D (tinaco): disparo al detectar la caída libre
+  bool no_servo = false;      // D: sin disparo, sin intentos, sin energía al servo
   // Detector de liberación (SPEC estado 3). Valores del modo A (SM_LIB_*); B los acorta.
   float lowg_t_s = SM_LIB_LOWG_T_S;           // (a) |a| < 0.35 g durante esto ...
   float confirm_vz_ms = SM_LIB_CONFIRMA_VZ_MS; //    ... confirmada por vz < esto ...
@@ -49,7 +53,7 @@ struct DeployParams {
 
 DeployParams deployParams(DeployMode m);
 char deployModeChar(DeployMode m);
-// 'A', 'B' o 'C' (también minúsculas). false si no es un modo válido.
+// 'A', 'B', 'C' o 'D' (también minúsculas). false si no es un modo válido.
 bool deployModeFromChar(char c, DeployMode &out);
 DeployMode deployModeDefault();  // DEPLOY_MODE_DEFAULT de config.h
 
