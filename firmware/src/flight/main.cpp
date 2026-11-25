@@ -50,6 +50,10 @@
 #include "power.h"
 #include "sensors.h"
 #include "servo_hw.h"
+#ifndef DEMO_SEPARACION
+#include "indicadores.h"
+#include "oled_hw.h"
+#endif
 #include "sim_input.h"
 #include "telemetry.h"
 #include "telemetry_pack.h"
@@ -484,6 +488,10 @@ static void commsTask(void *) {
   uint8_t last_demo = 0;
   TelemetryPacket pkt;
   MissionRecord rec;
+#ifndef DEMO_SEPARACION
+  uint32_t last_oled = 0;
+  bool oled_on = true;  // begin() la deja encendida y en blanco
+#endif
   for (;;) {
     // Espera corta por registros del log; despierta al menos cada 5 ms.
     if (xQueueReceive(log_queue, &pkt, pdMS_TO_TICKS(5)) == pdTRUE) {
@@ -495,6 +503,33 @@ static void commsTask(void *) {
     telemetry::poll();
 
     if (xQueueReceive(nvs_queue, &rec, 0) == pdTRUE) mission_store::save(rec);
+
+#ifndef DEMO_SEPARACION
+    // Señales de vida (núcleo 0; el lazo de control no participa). Con el modo demo/banco
+    // el LED tiene otro significado y no hay pantalla.
+    {
+      const uint8_t st = pub_state, fl = pub_flags;
+      const uint32_t now = millis();
+      digitalWrite(PIN_LED_PLACA, ledOn(st, fl, now) ? HIGH : LOW);
+      if (oled::present()) {
+        if (!oledActiva(st)) {
+          if (oled_on) {  // al entrar en vuelo: se apaga y no se vuelve a escribir
+            oled::off();
+            oled_on = false;
+          }
+        } else if (now - last_oled >= 500) {  // 2 Hz como máximo
+          last_oled = now;
+          if (!oled_on) {
+            oled::on();
+            oled_on = true;
+          }
+          PantallaVuelo pv;
+          pantallaVuelo(st, fl, deployModeChar((DeployMode)pub_mode), telemetry::sent(), pv);
+          oled::drawFlight(pv);
+        }
+      }
+    }
+#endif
 
     if (req_flush || millis() - last_flush >= 1000) {
       req_flush = false;
@@ -591,11 +626,15 @@ static void commsTask(void *) {
 
 void setup() {
   power::begin();  // primero: servo sin energía y señal con pull-down
-#ifdef DEMO_SEPARACION
   static_assert(PIN_LED_PLACA == LED_BUILTIN, "PIN_LED_PLACA debe ser el LED de la variante");
-  pinMode(PIN_BOTON_PRG, INPUT_PULLUP);
   pinMode(PIN_LED_PLACA, OUTPUT);
   digitalWrite(PIN_LED_PLACA, LOW);
+#ifdef DEMO_SEPARACION
+  pinMode(PIN_BOTON_PRG, INPUT_PULLUP);
+#else
+  // OLED en Wire1 (pines del variant), aparte del bus de sensores. Si no responde, el
+  // firmware sigue sin pantalla.
+  const bool oled_ok = oled::begin();
 #endif
   // Búfer de recepción grande (antes de begin): en el modo simulación llegan ~7 kB/s y
   // comms puede estar ocupada decenas de ms (LittleFS); con los 256 B por defecto del
@@ -629,6 +668,9 @@ void setup() {
                   logPercent(logger::sizeBytes(), logger::capacityBytes()));
   const int16_t rs = telemetry::begin();
   Serial.printf("Radio %s (codigo %d)\n", rs == 0 ? "OK" : "FALLA", rs);
+#ifndef DEMO_SEPARACION
+  Serial.printf("OLED %s\n", oled_ok ? "OK" : "no responde (sigue sin pantalla)");
+#endif
   Serial.printf("NVS %s\n", mission_store::begin() ? "OK" : "FALLA");
 
   // Modo de despliegue guardado (o el de config.h). Queda en el log en cada arranque.

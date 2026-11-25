@@ -21,6 +21,9 @@ arranca y entra sola a AUTOPRUEBA -> TIERRA (sin armado); no hay reed ni enclava
 | `rx_station` | receptor de la estación terrena | `pio run -e rx_station -t upload` |
 | `native` | pruebas en PC | `pio test -e native` |
 
+Las librerías están fijadas en `platformio.ini`; compilar una vez con internet las deja en
+`.pio/libdeps` para usarlas sin red.
+
 `pio` está en el `.venv` del proyecto: en Linux `../.venv/bin/pio` (o `source
 ../.venv/bin/activate` y luego `pio`), en Windows `..\.venv\Scripts\pio.exe`. Puertos: Linux
 `/dev/ttyUSB0`, `/dev/ttyUSB1`... (`--upload-port /dev/ttyUSB1`); Windows `COM5`, `COM6`...
@@ -58,6 +61,34 @@ test/        pruebas Unity (native): test_flight = escenarios de vuelo con
              tools/flight_sim.py; test_state_machine = casos sintéticos
 scripts/     scripts de PlatformIO
 ```
+
+## Señales de vida (LED y OLED)
+Solo `heltec_wifi_lora_32_V3` y `rx_station` (en `heltec_demo`/`heltec_banco` el LED conserva
+su patrón de la cuenta regresiva y no hay pantalla). La lógica es pura y está en
+`lib/indicadores` (probada en native: `test_indicadores`); el manejo de la pantalla en
+`src/common/oled_hw.*` (Adafruit SSD1306 + GFX sobre `Wire1`, pines `SDA_OLED`, `SCL_OLED`,
+`RST_OLED` y `Vext` del variant; Vext en LOW alimenta la OLED). El LED y la pantalla se
+manejan en la tarea `comms` (núcleo 0); el lazo de control de 100 Hz no participa.
+
+| Estado de la placa | LED (GPIO35) |
+|---|---|
+| 0 AUTOPRUEBA | parpadeo muy rápido (10 Hz) |
+| 1 TIERRA sin fallos (banderas 5, 6 y 7 en 0) | doble destello cada 2 s |
+| 1 TIERRA con fallo de barómetro, de IMU o NO-GO | parpadeo rápido (5 Hz) |
+| 2 a 5 (ASCENSO, CAIDA, DESPLIEGUE, DESCENSO) | apagado |
+| 6 ATERRIZADO | un destello por segundo |
+
+Pantalla de vuelo (≤ 2 Hz, solo estados 0, 1 y 6; en 2 a 5 se manda un único
+`DISPLAYOFF` al entrar y no se vuelve a escribir): `HELLMARY  MODO x`, `EST n NOMBRE`,
+GO/NO-GO grande (NO-GO si las banderas 5, 6 o 7 están en 1), `IMU .. BARO ..` y `TX n`.
+Pantalla de `rx_station` (2 Hz): `RX PAQ n`, `RSSI .. SNR ..`, `EST n NOMBRE`, `ALT .. m` y
+`ULTIMO HACE n s` o `SIN ENLACE` (> 5 s). Sin pantalla, `oled::begin()` devuelve false (no
+responde el 0x3C), el arranque lo imprime y todo sigue sin ella.
+
+**Librerías con versión fija** (sin `^`, para poder compilar sin internet una vez
+descargadas en `.pio/libdeps`): RadioLib 7.8.1, Adafruit BMP280 2.6.8, Unified Sensor 1.1.15,
+BusIO 1.17.4, SSD1306 2.5.17 y GFX 1.12.6. Tamaño (vuelo): RAM 6.6 % (21.7 kB de 327 kB),
+flash 12.9 % (431 kB de 3.3 MB); `rx_station`: RAM 6.2 %, flash 10.0 %.
 
 ## Tareas
 - `control` (núcleo 1, 100 Hz): IMU cada ciclo, BMP280 cada 4 (25 Hz) y

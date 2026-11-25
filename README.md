@@ -158,6 +158,28 @@ Sin argumento, cada script prueba los `/dev/ttyUSB*` mandando `STAT` y usa el qu
 confirma el modo, fallan en rojo con código de salida distinto de 0 (el modo solo cambia en
 los estados 0 y 1).
 
+## Señales de vida: LED y pantalla OLED
+
+Solo en el firmware de vuelo (`heltec_wifi_lora_32_V3`) y en `rx_station`; el modo
+demo/banco no cambia (su LED tiene otro significado y no usa la pantalla).
+
+| Estado de la placa | LED (GPIO35) |
+|---|---|
+| 0 AUTOPRUEBA | parpadeo muy rápido (10 Hz) |
+| 1 TIERRA sin fallos (banderas 5, 6 y 7 en 0) | doble destello cada 2 s |
+| 1 TIERRA con fallo de barómetro, de IMU o NO-GO | parpadeo rápido (5 Hz) |
+| 2 a 5 (ASCENSO, CAIDA, DESPLIEGUE, DESCENSO) | apagado |
+| 6 ATERRIZADO | un destello por segundo |
+
+**Pantalla de la placa de vuelo** (OLED 128x64; se actualiza a 2 Hz como máximo y **solo en los
+estados 0, 1 y 6**: al entrar en vuelo se apaga y no se escribe más): nombre y modo de
+despliegue (`HELLMARY  MODO B`), estado, **GO** o **NO-GO** en grande (NO-GO = fallo de
+barómetro, de IMU o NO-GO; se ve en vídeo inverso), `IMU OK/FALLA  BARO OK/FALLA` y los
+paquetes enviados (`TX n`). **Pantalla de `rx_station`:** paquetes recibidos, RSSI, SNR,
+último estado recibido, altura y «ÚLTIMO HACE n s» (o **SIN ENLACE** si pasan más de 5 s o
+aún no llega nada). Si la pantalla no está o no responde, el firmware funciona igual (el
+arranque imprime `OLED no responde`).
+
 ## Comandos de la placa (serial, 115200 baudios)
 
 | Comando | Efecto |

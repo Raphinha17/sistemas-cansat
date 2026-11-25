@@ -27,3 +27,6 @@ Compilación alterna DEMO_SEPARACION (entornos heltec_demo y heltec_banco): el s
 Banderas: bit0 base lista, bit1 liberacion, bit2 disparo, bit3 disparo por respaldo, bit4 aterrizado, bit5 fallo baro, bit6 fallo imu, bit7 NO-GO.
 ## Estación terrena
 Receptor: segunda Heltec V3 que imprime por USB cada paquete en hex más RSSI y SNR. Backend Python (pyserial + FastAPI + WebSocket). Frontend web sin CDN (todo local). Guarda CSV y crudo.
+## Señales de vida (firmware de vuelo y rx_station; no en demo/banco)
+LED de la placa (GPIO35, LED_BUILTIN), manejado desde el núcleo 0: AUTOPRUEBA parpadeo 10 Hz; TIERRA sin fallos (banderas bits 5, 6 y 7 en 0) doble destello cada 2 s; TIERRA con fallo de baro, de IMU o NO-GO parpadeo 5 Hz; estados 2 a 5 apagado; ATERRIZADO un destello por segundo.
+OLED SSD1306 128x64 (SDA 17, SCL 18, RST 21, Vext GPIO36 en LOW) en un bus propio (Wire1), separado del de sensores (41/42). Vuelo: núcleo 0, máximo 2 Hz y solo en los estados 0, 1 y 6 (en 2 a 5 se apaga y no se escribe): nombre y modo (A, B, C o D), estado, GO/NO-GO en grande (NO-GO si bits 5, 6 o 7), IMU y BARO OK/FALLA y paquetes enviados. rx_station: paquetes recibidos, RSSI, SNR, último estado, altura y segundos desde el último paquete (SIN ENLACE si pasan más de 5 s). Sin pantalla el firmware sigue normal.
