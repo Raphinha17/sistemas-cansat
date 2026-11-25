@@ -1,0 +1,173 @@
+/* Tema "plano técnico / bitácora de vuelo" (predeterminado). Todo va colgado de
+   html.t-plano: sin esa clase (?tema=clasico o tecla T) manda style.css intacto.
+   Papel crema, tinta azul muy oscura, líneas de 1 px, esquinas rectas, un único color de
+   alerta (naranja aeronáutico). Fuentes locales (fonts/, licencia OFL): sin red. */
+@font-face { font-family: "IBM Plex Mono"; font-weight: 400; font-style: normal;
+  src: url("/static/fonts/ibm-plex-mono-latin-400-normal.woff2") format("woff2"); }
+@font-face { font-family: "IBM Plex Mono"; font-weight: 500; font-style: normal;
+  src: url("/static/fonts/ibm-plex-mono-latin-500-normal.woff2") format("woff2"); }
+@font-face { font-family: "IBM Plex Mono"; font-weight: 700; font-style: normal;
+  src: url("/static/fonts/ibm-plex-mono-latin-700-normal.woff2") format("woff2"); }
+@font-face { font-family: "IBM Plex Sans Condensed"; font-weight: 400; font-style: normal;
+  src: url("/static/fonts/ibm-plex-sans-condensed-latin-400-normal.woff2") format("woff2"); }
+@font-face { font-family: "IBM Plex Sans Condensed"; font-weight: 500; font-style: normal;
+  src: url("/static/fonts/ibm-plex-sans-condensed-latin-500-normal.woff2") format("woff2"); }
+@font-face { font-family: "IBM Plex Sans Condensed"; font-weight: 700; font-style: normal;
+  src: url("/static/fonts/ibm-plex-sans-condensed-latin-700-normal.woff2") format("woff2"); }
+
+html.t-plano {
+  --paper: #f1e9d2; --paper2: rgba(248, 243, 228, .86); --ink: #0c1830; --ink2: #3a4764;
+  --alert: #ff6a13;
+  /* las variables del tema clásico, redefinidas: lo que no se sobrescribe abajo se adapta */
+  --bg: var(--paper); --panel: var(--paper2); --panel2: #f8f3e4; --line: var(--ink);
+  --text: var(--ink); --dim: var(--ink2); --accent: var(--ink);
+  --ok: var(--ink); --warn: var(--ink); --bad: var(--alert);
+  --font: "IBM Plex Sans Condensed", "Arial Narrow", "Liberation Sans Narrow", sans-serif;
+  --mono: "IBM Plex Mono", "DejaVu Sans Mono", "Liberation Mono", Consolas, monospace;
+  --regla: var(--ink);
+}
+html.t-plano body {
+  background-color: var(--paper);
+  background-image: linear-gradient(rgba(12, 24, 48, .07) 1px, transparent 1px),
+                    linear-gradient(90deg, rgba(12, 24, 48, .07) 1px, transparent 1px);
+  background-size: 1.5rem 1.5rem;
+  color: var(--ink); font-family: var(--font); font-variant-numeric: tabular-nums;
+}
+html.t-plano small { color: var(--ink2); }
+
+/* paneles: línea de 1 px, esquinas rectas, marcas de registro en las cuatro esquinas */
+html.t-plano #top, html.t-plano .card, html.t-plano .chart, html.t-plano .panel,
+html.t-plano .st {
+  background: var(--paper2); border: 1px solid var(--ink); border-radius: 0; box-shadow: none;
+  position: relative;
+}
+html.t-plano #top::before, html.t-plano .card::before, html.t-plano .chart::before,
+html.t-plano .panel::before, html.t-plano .st::before {
+  content: ""; position: absolute; inset: -4px; pointer-events: none; z-index: 2;
+  background:
+    linear-gradient(var(--ink), var(--ink)) 0 0 / 8px 1px no-repeat,
+    linear-gradient(var(--ink), var(--ink)) 0 0 / 1px 8px no-repeat,
+    linear-gradient(var(--ink), var(--ink)) 100% 0 / 8px 1px no-repeat,
+    linear-gradient(var(--ink), var(--ink)) 100% 0 / 1px 8px no-repeat,
+    linear-gradient(var(--ink), var(--ink)) 0 100% / 8px 1px no-repeat,
+    linear-gradient(var(--ink), var(--ink)) 0 100% / 1px 8px no-repeat,
+    linear-gradient(var(--ink), var(--ink)) 100% 100% / 8px 1px no-repeat,
+    linear-gradient(var(--ink), var(--ink)) 100% 100% / 1px 8px no-repeat;
+}
+html.t-plano #app { gap: .75rem; }
+html.t-plano #main, html.t-plano #cards, html.t-plano #charts, html.t-plano #side { gap: .75rem; }
+html.t-plano #timeline { gap: .6rem; }
+
+/* encabezado */
+html.t-plano .title { font-family: var(--font); font-weight: 700; letter-spacing: .12em; color: var(--ink); }
+html.t-plano .brand .sub { color: var(--ink2); }
+html.t-plano .pill { border-radius: 0; font-family: var(--font); font-weight: 700; letter-spacing: .1em;
+                     box-shadow: none; }
+html.t-plano .pill.ok { background: var(--paper); color: var(--ink); border: 2px solid var(--ink); }
+html.t-plano .pill.wait { background: transparent; color: var(--ink2); border: 1px dashed var(--ink2); }
+html.t-plano .pill.bad { background: var(--alert); color: var(--ink); border: 2px solid var(--ink); }
+html.t-plano .mini span, html.t-plano .clock span { color: var(--ink2); font-weight: 500; }
+html.t-plano .mini i { color: var(--ink2); }
+html.t-plano .mini b, html.t-plano .clock b, html.t-plano .attnum b {
+  font-family: var(--mono); font-weight: 700; color: var(--ink); letter-spacing: -.02em; }
+html.t-plano .clock b { color: var(--ink); font-size: 2.1rem; }
+html.t-plano .recstate.off { color: var(--ink2); }
+html.t-plano .recstate.on { color: var(--ink); }
+html.t-plano .recstate.on::first-letter { color: var(--alert); text-shadow: 0 0 0 var(--ink); }
+html.t-plano .small { background: var(--paper); color: var(--ink); border: 1px solid var(--ink);
+                      border-radius: 0; font-family: var(--font); font-weight: 600; letter-spacing: .04em; }
+html.t-plano .small:hover { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+html.t-plano .small.active { background: var(--ink); color: var(--paper); }
+html.t-plano .recbtn { border-radius: 0; font-family: var(--font); font-weight: 700; letter-spacing: .08em;
+                       border: 2px solid var(--ink); }
+html.t-plano .recbtn.start { background: var(--ink); color: var(--paper); }
+html.t-plano .recbtn.stop { background: var(--alert); color: var(--ink); animation: blink 1.4s steps(2) infinite; }
+/* el logotipo es un escudo de fondo oscuro: sobre papel se ve bien, con marco de tinta */
+html.t-plano .logowrap { height: 3.5rem; }
+html.t-plano #logo { background: var(--ink); border: 1px solid var(--ink); padding: .1rem;
+                     height: 3.5rem; max-width: 10rem; }
+html.t-plano .ghost { color: var(--ink2); opacity: .8; }
+
+/* tira de estados: el actual con relleno de tinta y texto crema */
+html.t-plano .st .n { font-family: var(--font); font-weight: 700; color: var(--ink2); }
+html.t-plano .st .t { font-family: var(--mono); color: var(--ink2); }
+html.t-plano .st.visited { border-color: var(--ink); }
+html.t-plano .st.visited .n { color: var(--ink); }
+html.t-plano .st.current { background: var(--ink); border-color: var(--ink); box-shadow: none; }
+html.t-plano .st.current .n { color: var(--paper); }
+html.t-plano .st.current .t { color: var(--paper); }
+html.t-plano .st.current::after { display: none; }
+
+/* rótulos de cada panel, como el cuadro de títulos de un plano */
+html.t-plano .ct { font-family: var(--font); font-weight: 700; letter-spacing: .1em; color: var(--ink);
+                   border-bottom: 1px solid var(--ink); padding-bottom: .2rem; margin-bottom: .3rem; }
+html.t-plano .ct { gap: .35rem; white-space: nowrap; min-width: 0; }
+html.t-plano .ct small { color: var(--ink2); font-weight: 400; overflow: hidden; text-overflow: ellipsis;
+                         min-width: 0; flex: 0 1 auto; }
+html.t-plano .small, html.t-plano .recbtn, html.t-plano .pill { font-variant-emoji: text; }
+html.t-plano #ch-h .ct::before { content: "FIG. 1 · "; color: var(--ink2); font-weight: 500; }
+html.t-plano #ch-vz .ct::before { content: "FIG. 2 · "; color: var(--ink2); font-weight: 500; }
+html.t-plano #ch-a .ct::before { content: "FIG. 3 · "; color: var(--ink2); font-weight: 500; }
+html.t-plano #ch-att .ct::before { content: "FIG. 4 · "; color: var(--ink2); font-weight: 500; }
+html.t-plano #attpanel .ct::before { content: "FIG. 5 · "; color: var(--ink2); font-weight: 500; }
+html.t-plano #flagpanel .ct::before { content: "FIG. 6 · "; color: var(--ink2); font-weight: 500; }
+html.t-plano #evpanel .ct::before { content: "FIG. 7 · "; color: var(--ink2); font-weight: 500; }
+html.t-plano .toolbar .tl { font-family: var(--font); font-weight: 700; color: var(--ink); }
+html.t-plano #pausetag { background: var(--ink); color: var(--paper); border-radius: 0;
+                         font-family: var(--font); }
+
+/* tarjetas de datos: cifras grandes en monoespaciada */
+html.t-plano .card .lbl { font-family: var(--font); font-weight: 700; color: var(--ink);
+                          border-bottom: 1px solid var(--ink); padding-bottom: .15rem; }
+html.t-plano .card .val b { font-family: var(--mono); font-weight: 700; font-size: 2.6rem;
+                            letter-spacing: -.045em; color: var(--ink); }
+html.t-plano .card .unit { font-family: var(--font); font-weight: 500; color: var(--ink2); }
+html.t-plano .card .sub { color: var(--ink2); }
+html.t-plano #c-h, html.t-plano #c-vz { border-color: var(--ink); }
+/* velocidad de descenso dentro de 8 a 12 m/s: trama fina de rayas y marco grueso de tinta;
+   fuera de la banda: naranja de alerta */
+html.t-plano .card.ok { border: 2px solid var(--ink);
+  background: repeating-linear-gradient(135deg, transparent 0 .35rem, rgba(12, 24, 48, .13) .35rem .4rem), var(--paper2); }
+html.t-plano .card.ok .val b { color: var(--ink); }
+html.t-plano .card.warn { border: 2px solid var(--ink); background: var(--alert); }
+html.t-plano .card.warn .val b, html.t-plano .card.warn .unit, html.t-plano .card.warn .sub,
+html.t-plano .card.warn .lbl { color: var(--ink); }
+html.t-plano .card.warn .lbl { border-bottom-color: var(--ink); }
+html.t-plano .card.nd .val b { color: var(--ink2); font-size: 2rem; }
+html.t-plano body.stale .card .val b { opacity: .45; }
+
+/* gráficas uPlot en papel */
+html.t-plano .u-legend { font-family: var(--font); color: var(--ink); }
+html.t-plano .u-legend th { color: var(--ink) !important; }
+html.t-plano .u-legend .u-value { font-family: var(--mono); }
+html.t-plano .u-cursor-x, html.t-plano .u-cursor-y { border-color: var(--ink) !important; }
+html.t-plano .u-select { background: rgba(12, 24, 48, .08); }
+
+/* costado: actitud, banderas, eventos */
+html.t-plano .attnum span { color: var(--ink2); font-weight: 500; }
+html.t-plano #a-incl.warn b { color: var(--ink); background: var(--alert); padding: 0 .25rem; }
+html.t-plano .flag { color: var(--ink2); border-radius: 0; font-family: var(--font); }
+html.t-plano .flag i { border-radius: 0; background: transparent; border: 1px solid var(--ink);
+                       width: .8rem; height: .8rem; box-shadow: none !important; }
+html.t-plano .flag.on { color: var(--ink); font-weight: 700; }
+html.t-plano .flag.on i { background: var(--ink); }
+html.t-plano .flag.on.bad { background: var(--alert); }
+html.t-plano .flag.on.bad i { background: var(--paper); }
+html.t-plano #events li { border-bottom: 1px solid rgba(12, 24, 48, .35); font-family: var(--font); }
+html.t-plano #events .w, html.t-plano #events .m { font-family: var(--mono); color: var(--ink2); }
+html.t-plano #events li.ok .x, html.t-plano #events li.warn .x { color: var(--ink); }
+html.t-plano #events li.warn .x { font-weight: 700; }
+html.t-plano #events li.bad { background: var(--alert); }
+html.t-plano #events li.bad .x, html.t-plano #events li.bad .w, html.t-plano #events li.bad .m { color: var(--ink); }
+html.t-plano .techstats { color: var(--ink2); font-family: var(--mono); border-top: 1px solid var(--ink);
+                          margin-top: .25rem; padding-top: .25rem; }
+html.t-plano #events li.bad { padding-left: .3rem; padding-right: .3rem; }
+
+/* aviso de enlace: bloque naranja con filete de tinta, sin sombras */
+html.t-plano #banner { background: var(--alert); color: var(--ink); border: 2px solid var(--ink);
+                       border-radius: 0; box-shadow: none; font-family: var(--font); }
+html.t-plano #banner.warn { background: var(--alert); color: var(--ink); }
+
+/* modo video: se conserva el tema; el logo sigue visible */
+html.t-plano body.video .ghost { opacity: .35; }
+html.t-plano body.video #logo { height: 3.5rem; max-width: 14rem; }

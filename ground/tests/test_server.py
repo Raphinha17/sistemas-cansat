@@ -180,3 +180,25 @@ def test_letrero_pausado_no_tapa_el_boton():
     regla = re.search(r"#pausetag\s*\{([^}]*)\}", css).group(1)
     assert "pointer-events: none" in regla and "position: absolute" not in regla
     assert '"▶ Reanudar" : "⏸ Pausar"' in js and "hidden = !p" in js
+
+
+def test_tema_plano_sin_red(tmp_path):
+    """El tema 'plano técnico' y sus fuentes se sirven desde el propio servidor (sin CDN) y
+    el tema clásico sigue intacto como respaldo (?tema=clasico, tecla T)."""
+    import re
+    st, app = _client(tmp_path)
+    with app as c:
+        html = c.get("/").text
+        assert "/static/tema-plano.css" in html and "hellmary_tema" in html
+        css = c.get("/static/tema-plano.css")
+        assert css.status_code == 200
+        urls = re.findall(r"url\(\"?([^)\"]+)", css.text)
+        assert urls and all(u.startswith("/static/fonts/") for u in urls)   # nada de red
+        for u in set(urls):
+            assert c.get(u).status_code == 200, u
+        assert c.get("/static/fonts/LICENSE-IBM-Plex-OFL.txt").status_code == 200
+        assert c.get("/static/style.css").status_code == 200               # el clásico, aparte
+        js = c.get("/static/app.js").text
+        assert "hellmary_tema" in js and 'e.key === "t"' in js
+    for f in (html, css.text, js):
+        assert not re.search(r"https?://(?!127\.0\.0\.1)", f.replace("http://www.w3.org", ""))

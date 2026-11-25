@@ -212,7 +212,14 @@ function lowerBound(arr, x) {
 }
 
 /* ---------------- gráficas (uPlot) ---------------- */
-const AX = { stroke: "#9fb0c3", grid: { stroke: "#1e2b3b", width: 1 }, ticks: { stroke: "#1e2b3b" }, font: "14px Segoe UI, Arial" };
+/* Tema visual: "plano" (predeterminado) o "clasico" (el anterior, intacto). La clase t-plano
+   en <html> la pone un script del <head>; aquí se leen los colores que no son CSS. */
+const INK = "#0c1830", INK2 = "#3a4764", PAPER = "#f1e9d2", ALERT = "#ff6a13";
+const isPlano = () => document.documentElement.classList.contains("t-plano");
+const axStyle = () => isPlano()
+  ? { stroke: INK, grid: { stroke: "rgba(12,24,48,.16)", width: 1 }, ticks: { stroke: INK, width: 1 },
+      font: "500 13px 'IBM Plex Mono', 'DejaVu Sans Mono', monospace" }
+  : { stroke: "#9fb0c3", grid: { stroke: "#1e2b3b", width: 1 }, ticks: { stroke: "#1e2b3b" }, font: "14px Segoe UI, Arial" };
 const charts = [];
 
 function makeChart(id, series, extra) {
@@ -222,15 +229,19 @@ function makeChart(id, series, extra) {
     legend: { show: true },
     cursor: { drag: { x: false, y: false }, points: { show: false } },
     scales: { x: { time: false } },
-    axes: [Object.assign({}, AX, { values: (u, v) => v.map(fmtMS) }), Object.assign({}, AX, { size: 56 })],
+    axes: [Object.assign({}, axStyle(), { values: (u, v) => v.map(fmtMS) }), Object.assign({}, axStyle(), { size: 56 })],
     series: [{ label: "t", value: (u, v) => (v == null ? "—" : fmtT(v)) }].concat(
-      series.map((s) => ({ label: s.label, stroke: s.color, width: 2.5, points: { show: false },
+      series.map((s) => ({ label: s.label, points: { show: false },
+                           // plano: líneas de tinta con distinto trazo (continua, guiones, puntos)
+                           stroke: isPlano() ? s.ink : s.color, width: isPlano() ? (s.ancho || 2) : 2.5,
+                           dash: isPlano() ? s.dash : undefined,
                            value: (u, v) => (v == null ? "—" : v.toFixed(s.dec == null ? 1 : s.dec)) }))),
   }, extra || {});
   const u = new uPlot(opts, [[], ...series.map(() => [])], host);
   const c = { u, host, keys: series.map((s) => s.key) };
   charts.push(c);
-  new ResizeObserver(() => fit(c)).observe(host);
+  c.ro = new ResizeObserver(() => fit(c));
+  c.ro.observe(host);
   return c;
 }
 function fit(c) {
@@ -239,19 +250,34 @@ function fit(c) {
   c.u.setSize({ width: Math.max(80, c.host.clientWidth), height: Math.max(60, c.host.clientHeight - lh - 2) });
 }
 function buildCharts() {
-  const vzBand = (u) => {                           // banda verde de 8 a 12 m/s de descenso
+  const vzBand = (u) => {                           // banda de 8 a 12 m/s de descenso
     const y1 = u.valToPos(-8, "y", true), y2 = u.valToPos(-12, "y", true), { ctx } = u;
-    ctx.save(); ctx.fillStyle = "rgba(52,211,153,.14)";
-    ctx.fillRect(u.bbox.left, Math.min(y1, y2), u.bbox.width, Math.abs(y2 - y1)); ctx.restore();
+    const top = Math.min(y1, y2), alto = Math.abs(y2 - y1);
+    ctx.save();
+    if (isPlano()) {                                // rayas finas de tinta a 45° y filetes
+      const dpr = window.devicePixelRatio || 1, t = Math.max(6, Math.round(7 * dpr));
+      const tile = document.createElement("canvas"); tile.width = tile.height = t;
+      const g = tile.getContext("2d"); g.strokeStyle = INK; g.globalAlpha = 0.55; g.lineWidth = Math.max(1, dpr * 0.8);
+      g.beginPath(); g.moveTo(0, t); g.lineTo(t, 0); g.moveTo(-t / 2, t / 2); g.lineTo(t / 2, -t / 2);
+      g.moveTo(t / 2, t * 1.5); g.lineTo(t * 1.5, t / 2); g.stroke();
+      ctx.fillStyle = ctx.createPattern(tile, "repeat");
+      ctx.fillRect(u.bbox.left, top, u.bbox.width, alto);
+      ctx.strokeStyle = INK; ctx.lineWidth = Math.max(1, dpr); ctx.globalAlpha = 1;
+      ctx.strokeRect(u.bbox.left, top, u.bbox.width, alto);
+    } else {
+      ctx.fillStyle = "rgba(52,211,153,.14)";
+      ctx.fillRect(u.bbox.left, top, u.bbox.width, alto);
+    }
+    ctx.restore();
   };
-  makeChart("ch-h", [{ key: "h", label: "Altura (m)", color: "#38bdf8" }]);
-  makeChart("ch-vz", [{ key: "vz", label: "vz (m/s)", color: "#fb923c" }], { hooks: { drawClear: [vzBand] } });
-  makeChart("ch-a", [{ key: "ax", label: "ax (g)", color: "#f87171", dec: 2 },
-                     { key: "ay", label: "ay (g)", color: "#34d399", dec: 2 },
-                     { key: "az", label: "az (g)", color: "#60a5fa", dec: 2 }]);
-  makeChart("ch-att", [{ key: "ro", label: "roll (°)", color: "#f472b6" },
-                       { key: "pi", label: "pitch (°)", color: "#fbbf24" },
-                       { key: "ya", label: "yaw (°)", color: "#a78bfa", dec: 0 }]);
+  makeChart("ch-h", [{ key: "h", label: "Altura (m)", color: "#38bdf8", ink: INK, ancho: 2.4 }]);
+  makeChart("ch-vz", [{ key: "vz", label: "vz (m/s)", color: "#fb923c", ink: INK, ancho: 2.2 }], { hooks: { drawClear: [vzBand] } });
+  makeChart("ch-a", [{ key: "ax", label: "ax (g)", color: "#f87171", dec: 2, ink: INK },
+                     { key: "ay", label: "ay (g)", color: "#34d399", dec: 2, ink: INK2, dash: [9, 4] },
+                     { key: "az", label: "az (g)", color: "#60a5fa", dec: 2, ink: "#6c7893", dash: [2, 4] }]);
+  makeChart("ch-att", [{ key: "ro", label: "roll (°)", color: "#f472b6", ink: INK },
+                       { key: "pi", label: "pitch (°)", color: "#fbbf24", ink: INK2, dash: [9, 4] },
+                       { key: "ya", label: "yaw (°)", color: "#a78bfa", dec: 0, ink: "#6c7893", dash: [2, 4] }]);
   charts.forEach(fit);
 }
 function renderCharts() {
@@ -277,26 +303,38 @@ function drawAttitude() {
   const rad = (d) => (d * Math.PI) / 180;
   ctx.clearRect(0, 0, w, h);
   ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  const pl = isPlano();
+  // Paleta: plano = papel y tinta (sin cielo azul ni tierra café); clásico = la anterior
+  const P = pl ? {
+    anillo: PAPER, tickM: INK, tickm: INK2, rotulo: INK, cero: INK, marca: INK,
+    cielo: PAPER, tierra: INK, horizonte: PAPER, escalaCielo: INK, escalaTierra: PAPER,
+    aro: INK, cuerpo: INK, halo: PAPER, fuente: "'IBM Plex Mono', 'DejaVu Sans Mono', monospace",
+  } : {
+    anillo: "#0d1621", tickM: "#9fb0c3", tickm: "#4a5b70", rotulo: "#c9d4e0", cero: "#fbbf24", marca: "#fbbf24",
+    cielo: "#2b78b8", tierra: "#7a5230", horizonte: "#ffffff", escalaCielo: "#ffffff", escalaTierra: "#ffffff",
+    aro: "#e9eff6", cuerpo: "#fbbf24", halo: null, fuente: "Segoe UI, Arial",
+  };
 
   // Anillo de rumbo (yaw relativo: 0 = rumbo al arrancar)
   ctx.save(); ctx.translate(cx, cy);
-  ctx.fillStyle = "#0d1621"; ctx.beginPath(); ctx.arc(0, 0, Ro, 0, 7); ctx.fill();
+  ctx.fillStyle = P.anillo; ctx.beginPath(); ctx.arc(0, 0, Ro, 0, 7); ctx.fill();
+  if (pl) { ctx.strokeStyle = INK; ctx.lineWidth = 1.5 * dpr; ctx.beginPath(); ctx.arc(0, 0, Ro - dpr, 0, 7); ctx.stroke(); }
   ctx.rotate(rad(-yaw));
   for (let a = 0; a < 360; a += 10) {
     const major = a % 30 === 0, r1 = Ro, r2 = Ro * (major ? 0.9 : 0.94);
-    ctx.strokeStyle = major ? "#9fb0c3" : "#4a5b70"; ctx.lineWidth = major ? 2 * dpr : 1 * dpr;
+    ctx.strokeStyle = major ? P.tickM : P.tickm; ctx.lineWidth = major ? 2 * dpr : 1 * dpr;
     ctx.beginPath(); ctx.moveTo(Math.sin(rad(a)) * r1, -Math.cos(rad(a)) * r1);
     ctx.lineTo(Math.sin(rad(a)) * r2, -Math.cos(rad(a)) * r2); ctx.stroke();
     if (major) {
       const lab = { 0: "0", 90: "90", 180: "180", 270: "270" }[a] || String(a);
       ctx.save(); ctx.translate(Math.sin(rad(a)) * Ro * 0.83, -Math.cos(rad(a)) * Ro * 0.83);
-      ctx.rotate(rad(a)); ctx.fillStyle = a === 0 ? "#fbbf24" : "#c9d4e0";
-      ctx.font = `${Ro * 0.085}px Segoe UI, Arial`; ctx.fillText(lab, 0, 0); ctx.restore();
+      ctx.rotate(rad(a)); ctx.fillStyle = a === 0 ? P.cero : P.rotulo;
+      ctx.font = `${pl ? "700 " : ""}${Ro * 0.085}px ${P.fuente}`; ctx.fillText(lab, 0, 0); ctx.restore();
     }
   }
   ctx.restore();
   // Marca fija del rumbo
-  ctx.fillStyle = "#fbbf24"; ctx.beginPath();
+  ctx.fillStyle = P.marca; ctx.beginPath();
   ctx.moveTo(cx, cy - Ro * 0.99); ctx.lineTo(cx - Ro * 0.04, cy - Ro * 1.0 + Ro * 0.07);
   ctx.lineTo(cx + Ro * 0.04, cy - Ro * 1.0 + Ro * 0.07); ctx.fill();
 
@@ -305,26 +343,35 @@ function drawAttitude() {
   ctx.beginPath(); ctx.arc(0, 0, Ri, 0, 7); ctx.clip();
   ctx.rotate(rad(-roll));
   const k = Ri / 45, hy = pitch * k;
-  ctx.fillStyle = "#2b78b8"; ctx.fillRect(-Ro * 2, -Ro * 2, Ro * 4, Ro * 2 + hy);
-  ctx.fillStyle = "#7a5230"; ctx.fillRect(-Ro * 2, hy, Ro * 4, Ro * 2);
-  ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 2.5 * dpr;
+  ctx.fillStyle = P.cielo; ctx.fillRect(-Ro * 2, -Ro * 2, Ro * 4, Ro * 2 + hy);
+  ctx.fillStyle = P.tierra; ctx.fillRect(-Ro * 2, hy, Ro * 4, Ro * 2);
+  ctx.strokeStyle = P.horizonte; ctx.lineWidth = 2.5 * dpr;
   ctx.beginPath(); ctx.moveTo(-Ro * 2, hy); ctx.lineTo(Ro * 2, hy); ctx.stroke();
-  ctx.fillStyle = "#ffffff"; ctx.lineWidth = 1.5 * dpr; ctx.font = `${Ri * 0.09}px Segoe UI, Arial`;
+  ctx.lineWidth = 1.5 * dpr; ctx.font = `${pl ? "700 " : ""}${Ri * 0.09}px ${P.fuente}`;
   for (let a = -40; a <= 40; a += 10) {
     if (!a) continue;
     const y = hy - a * k, half = Ri * (a % 20 ? 0.16 : 0.28);
+    // plano: la escala va en tinta sobre el cielo (papel) y en papel sobre la tierra (tinta)
+    ctx.strokeStyle = ctx.fillStyle = a > 0 ? P.escalaCielo : P.escalaTierra;
     ctx.beginPath(); ctx.moveTo(-half, y); ctx.lineTo(half, y); ctx.stroke();
     if (a % 20 === 0) { ctx.fillText(Math.abs(a), half + Ri * 0.1, y); ctx.fillText(Math.abs(a), -half - Ri * 0.1, y); }
   }
   ctx.restore();
 
   // Aro del instrumento y símbolo fijo del cuerpo
-  ctx.strokeStyle = "#e9eff6"; ctx.lineWidth = 3 * dpr;
+  ctx.strokeStyle = P.aro; ctx.lineWidth = 3 * dpr;
   ctx.beginPath(); ctx.arc(cx, cy, Ri, 0, 7); ctx.stroke();
-  ctx.strokeStyle = "#fbbf24"; ctx.lineWidth = 4 * dpr; ctx.lineCap = "round";
-  ctx.beginPath(); ctx.moveTo(cx - Ri * 0.55, cy); ctx.lineTo(cx - Ri * 0.2, cy);
-  ctx.moveTo(cx + Ri * 0.2, cy); ctx.lineTo(cx + Ri * 0.55, cy); ctx.stroke();
-  ctx.fillStyle = "#fbbf24"; ctx.beginPath(); ctx.arc(cx, cy, Ri * 0.035, 0, 7); ctx.fill();
+  const simbolo = () => {
+    ctx.beginPath(); ctx.moveTo(cx - Ri * 0.55, cy); ctx.lineTo(cx - Ri * 0.2, cy);
+    ctx.moveTo(cx + Ri * 0.2, cy); ctx.lineTo(cx + Ri * 0.55, cy); ctx.stroke();
+  };
+  ctx.lineCap = pl ? "butt" : "round";
+  if (P.halo) {                                    // plano: halo de papel para verse sobre la tierra de tinta
+    ctx.strokeStyle = P.halo; ctx.lineWidth = 8 * dpr; simbolo();
+    ctx.fillStyle = P.halo; ctx.beginPath(); ctx.arc(cx, cy, Ri * 0.035 + 2.5 * dpr, 0, 7); ctx.fill();
+  }
+  ctx.strokeStyle = P.cuerpo; ctx.lineWidth = 4 * dpr; simbolo();
+  ctx.fillStyle = P.cuerpo; ctx.beginPath(); ctx.arc(cx, cy, Ri * 0.035, 0, 7); ctx.fill();
 }
 
 /* ---------------- WebSocket ---------------- */
@@ -436,6 +483,23 @@ document.querySelectorAll(".win").forEach((b) => (b.onclick = () => {
   S.dirty = true;
   if (S.paused) renderCharts();
 }));
+function setBandText() {                           // la banda es rayada en el plano
+  const small = document.querySelector("#ch-vz .ct small");
+  if (small) small.textContent = isPlano() ? "m/s · banda rayada: 8 a 12" : "m/s · banda verde: 8 a 12";
+}
+function rebuildCharts() {                         // al cambiar de tema se recrean las gráficas
+  charts.forEach((c) => { if (c.ro) c.ro.disconnect(); c.u.destroy(); c.host.innerHTML = ""; });
+  charts.length = 0;
+  buildCharts();
+  setBandText();
+  S.dirty = true;
+  renderCharts();
+}
+function setTheme(name, save) {
+  document.documentElement.classList.toggle("t-plano", name === "plano");
+  if (save) lsSet("hellmary_tema", name);
+  rebuildCharts();
+}
 function setVideo(on) {
   document.body.classList.toggle("video", on);
   lsSet("hellmary_video", on ? "1" : "0");
@@ -446,6 +510,7 @@ document.addEventListener("keydown", (e) => {
   if (e.ctrlKey || e.altKey || e.metaKey) return;
   if (e.key === "v" || e.key === "V") setVideo(!document.body.classList.contains("video"));
   else if (e.key === "p" || e.key === "P") setPaused(!S.paused);
+  else if (e.key === "t" || e.key === "T") setTheme(isPlano() ? "clasico" : "plano", true);
 });
 window.addEventListener("resize", () => setTimeout(() => charts.forEach(fit), 50));
 
@@ -455,6 +520,7 @@ buildCharts();
 att.c = $("att"); att.ctx = att.c.getContext("2d");
 const qs = new URLSearchParams(location.search);   // ?video=1 abre en modo pantalla de video
 if (qs.get("video") === "1" || (qs.get("video") === null && lsGet("hellmary_video") === "1")) setVideo(true);
+setBandText();
 updateTimeline();
 connect();
 drawLoop();

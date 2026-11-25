@@ -7,6 +7,20 @@
 <link rel="icon" href="data:,">
 <link rel="stylesheet" href="/static/vendor/uPlot.min.css">
 <link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/tema-plano.css">
+<script>
+/* Tema: ?tema=clasico o plano; si no, el recordado en localStorage; por defecto plano. */
+(function () {
+  var t = "plano";
+  try {
+    var q = new URLSearchParams(location.search).get("tema");
+    var g = null;
+    try { g = localStorage.getItem("hellmary_tema"); } catch (e) { g = null; }
+    t = (q === "clasico" || q === "plano") ? q : (g === "clasico" ? "clasico" : "plano");
+  } catch (e) { t = "plano"; }
+  if (t === "plano") document.documentElement.classList.add("t-plano");
+})();
+</script>
 </head>
 <body>
 <div id="app">

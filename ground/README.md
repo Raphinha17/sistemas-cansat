@@ -54,8 +54,32 @@ disponible, la interfaz lo avisa y el servidor reintenta cada 2 s.
   el zoom del navegador al 100 % (F11 para pantalla completa).
 - **Reiniciar**: borra estadísticas, gráficas y eventos de la pantalla (no los archivos).
 
+## Tema visual: «plano técnico / bitácora de vuelo»
+La interfaz tiene dos temas. El **predeterminado** es el de *plano técnico*, pensado para
+usarse al aire libre a pleno sol (`static/tema-plano.css`): papel crema con rejilla sutil,
+tinta azul muy oscura, líneas de 1 px, esquinas rectas, marcas de registro en las esquinas
+de cada panel y rótulos tipo cuadro de títulos (`FIG. 1 · ALTURA`...). Hay **un solo color de
+alerta, el naranja aeronáutico**: NO-GO y fallos de sensores, enlace perdido y velocidad de
+descenso fuera de 8 a 12 m/s. Todo lo normal va en tinta; el estado actual de la tira va con
+relleno de tinta y texto crema; la velocidad dentro de la banda se marca con trama de rayas.
+Las gráficas distinguen las series por el trazo (continua, guiones, puntos), no solo por el
+color, y la banda de 8 a 12 m/s va con rayas finas. El horizonte artificial usa papel y tinta.
+Las cifras van en monoespaciada y los rótulos en sans condensada, con cifras tabulares.
+
+El tema anterior (oscuro) se conserva intacto como **respaldo**:
+- `http://127.0.0.1:8000/?tema=clasico` lo abre (y `?tema=plano` fuerza el nuevo);
+- la tecla **T** alterna entre los dos y recuerda la elección en el navegador
+  (`localStorage`, con `try/catch`: si el navegador lo bloquea, funciona igual sin recordar).
+El modo video (tecla **V**) funciona con ambos temas.
+
+**Sin red:** las fuentes están en `static/fonts/` (IBM Plex Mono e IBM Plex Sans Condensed,
+latin 400/500/700, WOFF2, licencia SIL OFL: `fonts/LICENSE-IBM-Plex-OFL.txt`); uPlot ya iba
+en `static/vendor/`. Ninguna fuente, ícono ni librería se carga de internet. Si faltaran las
+fuentes, el tema cae a `DejaVu Sans Mono` / `Liberation Mono` y a `Arial Narrow`.
+
 ## Logotipo
-Poner el archivo del equipo en **`ground/static/logo.png`**. Mientras no exista se
+Poner el archivo del equipo en **`ground/static/logo.png`** (en el tema plano se muestra
+sobre un recuadro de tinta, porque el escudo actual es de fondo oscuro). Mientras no exista se
 muestra un marcador amarillo que dice dónde ponerlo. Conviene un PNG con fondo
 transparente, de proporción ancha y unos 400x120 px o más.
 
