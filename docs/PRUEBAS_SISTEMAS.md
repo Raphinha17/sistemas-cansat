@@ -149,6 +149,16 @@ modo B (manda MODO B)`**: una placa que antes estaba en A **sigue en A** hasta m
 0100...,-31.5,9.75        <- una línea HEX,RSSI,SNR por paquete recibido
 ```
 
+### 1.4a Preparar la placa de vuelo de una vez (`tools/cargar_vuelo.sh`, Linux)
+```bash
+tools/cargar_vuelo.sh [/dev/ttyUSB1]    # sin argumento: solo si hay un único /dev/ttyUSB*
+```
+Carga `heltec_wifi_lora_32_V3` y hace el checklist de 1.4b (`MISION_BORRAR` con 5 s de
+espera, `BORRAR`, `MODO B`, `STAT`), verificando `despliegue=B`, `imu_err=0`, `baro_err=0` y
+un arranque sin `IMU FALLA` ni `BARO FALLA`. Sale con código 0 y «Placa lista para vuelo en
+MODO B» solo si todo está bien. **Es para la placa de vuelo con sensores**: en el banco sin
+sensores (§0) siempre falla en IMU y BARO, que ahí es lo esperado; usa el checklist manual.
+
 ### 1.4b Antes de cada prueba (checklist: `MISION_BORRAR`, `BORRAR`, `MODO B`, `STAT`)
 ```
 MISION_BORRAR     # borra el registro de misión de NVS y reinicia la placa

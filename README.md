@@ -92,6 +92,18 @@ pio run -d firmware -e rx_station -t upload --upload-port $RX               # re
 ```
 Sin `-t upload` solo compila. Descripción de cada entorno: `firmware/README.md`.
 
+**Preparar la placa de vuelo con un solo comando** (`tools/cargar_vuelo.sh`):
+```bash
+tools/cargar_vuelo.sh              # usa /dev/ttyUSB* solo si hay exactamente uno
+tools/cargar_vuelo.sh /dev/ttyUSB1 # o indica el puerto de la placa de vuelo
+```
+Compila y carga `heltec_wifi_lora_32_V3`, espera el reinicio y manda `MISION_BORRAR` (espera
+5 s), `BORRAR`, `MODO B` y `STAT`. Verifica que `STAT` diga `despliegue=B`, que `imu_err` y
+`baro_err` sean 0 y que el arranque no diga `IMU FALLA` ni `BARO FALLA`; imprime cada
+revisión como OK o FALLA (en rojo) y termina con «Placa lista para vuelo en MODO B» o el
+motivo, con código de salida distinto de 0 si algo falla. Con cero o varios puertos avisa y
+sale sin tocar nada. Requiere la placa **con sensores conectados** (sin ellos falla a propósito).
+
 **Estación terrena** (abrir luego `http://127.0.0.1:8000`, o el puerto elegido):
 ```bash
 python ground/server.py --port $RX --auto-record --web-port 8000   # placa receptora real
