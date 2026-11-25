@@ -30,6 +30,16 @@ def analizar(arranque: str, stat: str) -> List[Tuple[str, bool, str]]:
         m = re.search(rf"{campo}=(\d+)", stat)
         r.append((f"{campo} en 0", bool(m and int(m.group(1)) == 0),
                   f"{campo}={m.group(1)}" if m else f"STAT no mostró {campo}"))
+    m = re.search(r"banderas=0x([0-9A-Fa-f]{1,2})\b", stat)
+    if m:
+        val = int(m.group(1), 16)
+        mal = [n for bit, n in ((5, "fallo de barómetro"), (6, "fallo de IMU"), (7, "NO-GO"))
+               if val & (1 << bit)]
+        r.append(("banderas sin fallos (bits 5, 6 y 7 en 0)", not mal,
+                  f"0x{val:02X}" + (": " + ", ".join(mal) if mal else "")))
+    else:
+        r.append(("banderas sin fallos (bits 5, 6 y 7 en 0)", False,
+                  "STAT no mostró banderas=0x.."))
     if not re.search(r"IMU \w+", arranque):
         r.append(("arranque sin IMU FALLA ni BARO FALLA", False,
                   "no se vio el arranque de la placa (¿reinició?)"))

@@ -6,7 +6,7 @@ import cargar_vuelo as C
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 SH = os.path.join(ROOT, "tools", "cargar_vuelo.sh")
 ARR_OK = "IMU OK (WHO_AM_I=0x70)  BARO OK\nLittleFS OK\n"
-STAT_OK = ("despliegue=B [lanzamiento real] liberacion valida > 85 m\nestado=1\n"
+STAT_OK = ("despliegue=B [lanzamiento real] liberacion valida > 85 m\nestado=1 banderas=0x01 h=0.0\n"
            "ciclos=10 sobretiempos=0 max_us=900 imu_err=0 baro_err=0\n")
 
 
@@ -48,3 +48,21 @@ def test_sh_puerto_ninguno_o_varios(tmp_path):
     assert r.returncode != 0 and "varios puertos" in r.stderr and "Compilando" not in r.stdout
     r = _sh("x", str(tmp_path / "noexiste"))
     assert r.returncode != 0 and "No existe el puerto" in r.stderr
+
+
+NOMBRE_BANDERAS = "banderas sin fallos (bits 5, 6 y 7 en 0)"
+
+
+def test_banderas():
+    r = C.analizar(ARR_OK, STAT_OK)
+    assert ok(r)[NOMBRE_BANDERAS] and "0x01" in [d for n, _, d in r if n == NOMBRE_BANDERAS][0]
+    mal = C.analizar(ARR_OK, STAT_OK.replace("banderas=0x01", "banderas=0xE0"))
+    assert not ok(mal)[NOMBRE_BANDERAS]
+    assert "0xE0" in [d for n, _, d in mal if n == NOMBRE_BANDERAS][0]
+    for bit in ("0x20", "0x40", "0x80"):               # cada bit por separado
+        assert not ok(C.analizar(ARR_OK, STAT_OK.replace("banderas=0x01", f"banderas={bit}")))[
+            NOMBRE_BANDERAS]
+    sin = C.analizar(ARR_OK, STAT_OK.replace("banderas=0x01", ""))
+    assert not ok(sin)[NOMBRE_BANDERAS]
+    txt, listo = C.resumen(mal)
+    assert not listo and "\033[31mFALLA" in txt

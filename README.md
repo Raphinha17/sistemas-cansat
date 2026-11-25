@@ -99,7 +99,8 @@ tools/cargar_vuelo.sh /dev/ttyUSB1 # o indica el puerto de la placa de vuelo
 ```
 Compila y carga `heltec_wifi_lora_32_V3`, espera el reinicio y manda `MISION_BORRAR` (espera
 5 s), `BORRAR`, `MODO B` y `STAT`. Verifica que `STAT` diga `despliegue=B`, que `imu_err` y
-`baro_err` sean 0 y que el arranque no diga `IMU FALLA` ni `BARO FALLA`; imprime cada
+`baro_err` sean 0, que las banderas de `STAT` (`banderas=0x..`) no tengan los bits 5, 6 ni 7
+(fallo de barómetro, fallo de IMU, NO-GO) y que el arranque no diga `IMU FALLA` ni `BARO FALLA`; imprime cada
 revisión como OK o FALLA (en rojo) y termina con «Placa lista para vuelo en MODO B» o el
 motivo, con código de salida distinto de 0 si algo falla. Con cero o varios puertos avisa y
 sale sin tocar nada. Requiere la placa **con sensores conectados** (sin ellos falla a propósito).
