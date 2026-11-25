@@ -37,14 +37,14 @@ _HEX_RE = re.compile(r"^[0-9A-Fa-f]{%d}$" % (2 * T.PACKET_SIZE))
 
 # Banderas: (clave, bit, texto del evento, nivel)
 FLAG_DEFS = [
-    ("base_lista", T.F_BASE_LISTA, "Base lista", "info"),
-    ("liberacion", T.F_LIBERACION, "Liberación detectada", "ok"),
-    ("disparo", T.F_DISPARO, "Disparo del servo", "ok"),
-    ("respaldo", T.F_DISPARO_RESPALDO, "Disparo por respaldo", "warn"),
-    ("aterrizado", T.F_ATERRIZADO, "Aterrizaje detectado", "ok"),
-    ("fallo_baro", T.F_FALLO_BARO, "Fallo de barómetro", "bad"),
-    ("fallo_imu", T.F_FALLO_IMU, "Fallo de IMU", "bad"),
-    ("no_go", T.F_NO_GO, "NO-GO", "bad"),
+    ("base_lista", T.F_BASE_LISTA, "Sistema listo", "info"),
+    ("liberacion", T.F_LIBERACION, "Suelta detectada", "ok"),
+    ("disparo", T.F_DISPARO, "Separación activada", "ok"),
+    ("respaldo", T.F_DISPARO_RESPALDO, "Separación de respaldo", "warn"),
+    ("aterrizado", T.F_ATERRIZADO, "Aterrizaje", "ok"),
+    ("fallo_baro", T.F_FALLO_BARO, "Falla sensor de altura", "bad"),
+    ("fallo_imu", T.F_FALLO_IMU, "Falla sensor de movimiento", "bad"),
+    ("no_go", T.F_NO_GO, "NO LISTO", "bad"),
 ]
 
 CSV_FIELDS = (["hora_pc", "epoch_pc"] + T.field_names()

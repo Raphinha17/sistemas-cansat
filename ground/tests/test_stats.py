@@ -98,10 +98,10 @@ def test_eventos_de_estado_y_banderas():
                    rx(2, estado=3, flags=0x03), rx(3, estado=4, flags=0x07),
                    rx(4, estado=6, flags=0x17)])
     textos = [e["text"] for e in ev]
-    for esperado in ("Estado: ASCENSO", "Liberación detectada", "Disparo del servo",
-                     "Aterrizaje detectado", "Estado: ATERRIZADO"):
+    for esperado in ("Estado: ASCENSO", "Suelta detectada", "Separación activada",
+                     "Aterrizaje", "Estado: ATERRIZADO"):
         assert esperado in textos
-    assert textos.count("Liberación detectada") == 1   # solo al encenderse
+    assert textos.count("Suelta detectada") == 1   # solo al encenderse
     assert set(st.state_times) == {1, 2, 3, 4, 6}
     assert st.state_times[3]["m"] == 2.0
 

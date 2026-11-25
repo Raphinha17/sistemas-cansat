@@ -10,9 +10,9 @@ const REDRAW_MS = 150;              // las gráficas se redibujan como máximo ~
 
 const S = {
   ws: null, wsOk: false,
-  d: { m: [], h: [], vz: [], ax: [], ay: [], az: [], ro: [], pi: [], ya: [] },
+  d: { m: [], h: [], vz: [], ax: [], ay: [], az: [], ro: [], pi: [] },
   paused: false, winS: 120, dirty: false,
-  stats: null, source: null, rec: null, speed: 1,
+  stats: null, source: null, detalle: false, rec: null, speed: 1,
   last: null, estado: null, stateTimes: {},
   clock: { mission: 0, at: 0, running: false },
   flagsDef: [], flagEls: {},
@@ -59,7 +59,7 @@ function updateTimeline() {
     const el = $("st" + i), t = S.stateTimes[i];
     el.classList.toggle("current", S.estado === i);
     el.classList.toggle("visited", !!t && S.estado !== i);
-    el.querySelector(".t").textContent = t ? `${fmtWall(t.w)} · ${fmtT(t.m)}` : "";
+    el.querySelector(".t").textContent = t ? fmtT(t.m) : "";
   });
 }
 
@@ -91,12 +91,34 @@ function addEvent(e, prepend = true) {
 }
 
 /* ---------------- encabezado y tarjetas ---------------- */
+/* Indicador de SEÑAL: único lugar con los umbrales. Débil si el RSSI es peor que
+   DEBIL_RSSI_DBM o la pérdida supera DEBIL_PERDIDA_PCT; Buena si el RSSI es mejor que
+   BUENA_RSSI_DBM y la pérdida no pasa de BUENA_PERDIDA_PCT; si no, Regular. */
+const SENAL = { BUENA_RSSI_DBM: -100, BUENA_PERDIDA_PCT: 10, DEBIL_RSSI_DBM: -115, DEBIL_PERDIDA_PCT: 30 };
+function nivelSenal(rssi, perdidaPct) {
+  if (rssi == null || Number.isNaN(rssi)) return null;
+  if (rssi < SENAL.DEBIL_RSSI_DBM || perdidaPct > SENAL.DEBIL_PERDIDA_PCT) return "Débil";
+  if (rssi >= SENAL.BUENA_RSSI_DBM && perdidaPct <= SENAL.BUENA_PERDIDA_PCT) return "Buena";
+  return "Regular";
+}
+function setSenal(s) {
+  const n = s.received ? nivelSenal(s.rssi, s.loss_pct || 0) : null, b = $("m-sig");
+  b.textContent = n || "—";
+  b.classList.toggle("debil", n === "Débil");
+}
+function setDetalle(on) {                           // modo detalle (tecla D): RSSI, SNR y contadores
+  S.detalle = on;
+  document.body.classList.toggle("detalle", on);
+  lsSet("hellmary_detalle", on ? "1" : "0");
+  if (S.stats) applyStats(S.stats);
+}
 function applyStats(s) {
   S.stats = s;
   const pill = $("linkpill");
   if (s.link === "ok") { pill.className = "pill ok"; pill.textContent = "ENLACE OK"; }
   else if (s.link === "perdido") { pill.className = "pill bad"; pill.textContent = "ENLACE PERDIDO"; }
   else { pill.className = "pill wait"; pill.textContent = "ESPERANDO DATOS"; }
+  setSenal(s);
   $("m-rssi").textContent = fmt(s.rssi, 1);
   $("m-snr").textContent = fmt(s.snr, 2);
   $("m-loss").textContent = s.received ? fmt(s.loss_pct, 1) : "—";
@@ -106,6 +128,8 @@ function applyStats(s) {
   $("v-hmax").textContent = fmt(s.h_max, 1);
   $("techstats").textContent =
     `inválidas: ${s.invalid} · errores de radio: ${s.radio_errors} · duplicados: ${s.dups} · reinicios de secuencia: ${s.seq_restarts}`;
+  // La línea de contadores solo aparece si alguno es mayor que 0 o con el modo detalle (D)
+  $("techstats").hidden = !(S.detalle || s.invalid || s.radio_errors || s.dups || s.seq_restarts);
   // Cronómetro de misión: tiempo del último paquete; corre mientras el enlace está bien.
   S.clock = { mission: s.mission_s, at: performance.now(), running: s.link === "ok" };
   if (s.state_times) {
@@ -122,14 +146,12 @@ function updateVz() {
   const v = s ? s.vz_avg : null;
   $("v-vz").textContent = fmt(v, 1);
   card.classList.remove("ok", "warn");
-  // Verde dentro de 8 a 12 m/s de descenso; ámbar fuera de rango. Solo en DESCENSO.
+  // Dentro de 8 a 12 m/s de descenso: marcado normal; fuera de rango: alerta. Solo en DESCENSO.
   if (v != null && S.estado === ST_DESCENSO) card.classList.add(Math.abs(v) >= 8 && Math.abs(v) <= 12 ? "ok" : "warn");
-  $("s-vz").textContent = S.last ? `inst. ${fmt(S.last.vz, 1)} m/s · descenso esperado 8 a 12` : "descenso esperado 8 a 12 m/s";
 }
 function updateCards(p) {
   $("v-h").textContent = fmt(p.h, 1);
   $("v-p").textContent = fmt(p.p / 100, 1);
-  $("s-p").textContent = `${p.p} Pa`;
   $("v-t").textContent = fmt(p.T, 1);
   const bat = $("c-b");
   if (p.b > 0) {                                    // 0 = la placa no mide la pila: no es alarma
@@ -141,7 +163,6 @@ function updateCards(p) {
   }
   $("a-ro").textContent = fmt(p.ro, 1) + "°";
   $("a-pi").textContent = fmt(p.pi, 1) + "°";
-  $("a-ya").textContent = fmt(p.ya, 0) + "°";
   const incl = inclinacion(p.ro, p.pi);              // ángulo del eje z con la vertical
   $("a-in").textContent = fmt(incl, 0) + "°";
   $("a-incl").classList.toggle("warn", incl > 45);
@@ -169,10 +190,11 @@ function updateRec() {
   st.className = "recstate " + (on ? "on" : "off");
   if (on) {
     const el = Math.max(0, Date.now() / 1000 - r.started);
-    st.textContent = `● GRABANDO ${fmtT(el).slice(2)} · ${r.csv} · ${r.packets} paq.`;
+    st.textContent = `● GRABANDO ${fmtT(el).slice(2)} · ${r.packets} paq.`;
   } else {
-    st.textContent = r && r.csv ? `○ SIN GRABAR (última: ${r.csv})` : "○ SIN GRABAR";
+    st.textContent = "○ SIN GRABAR";
   }
+  st.title = r && r.csv ? (on ? "Archivo: " : "Última sesión: ") + r.csv : "";
   btn.className = "recbtn " + (on ? "stop" : "start");
   btn.textContent = on ? "FINALIZAR TOMA DE DATOS" : "INICIAR TOMA DE DATOS";
 }
@@ -180,30 +202,23 @@ function applyStatus(m) {
   S.source = m.source;
   S.speed = (m.source && m.source.speed) || 1;
   S.rec = m.rec;
-  $("src").textContent = m.source ? m.source.name : "—";
+  // Solo "SIMULADO" con --sim (el puerto, los baudios y la semilla ya no se muestran)
+  $("src").textContent = m.source && /^SIMULADOR/.test(m.source.name) ? " · SIMULADO" : "";
+  $("src").title = m.source ? m.source.name : "";
   applyStats(m.s);
   updateRec();
 }
 
 /* ---------------- datos de las gráficas ---------------- */
-let prevYaw = null;
 function pushPoint(p) {
   const d = S.d;
-  // El yaw da la vuelta en ±180°: se inserta un hueco para que no dibuje una línea vertical.
-  if (prevYaw !== null && Math.abs(p.ya - prevYaw) > 180 && d.m.length) {
-    const m = p.m - 1e-4;
-    d.m.push(m); d.h.push(p.h); d.vz.push(p.vz);
-    d.ax.push(p.ax); d.ay.push(p.ay); d.az.push(p.az);
-    d.ro.push(p.ro); d.pi.push(p.pi); d.ya.push(null);
-  }
-  prevYaw = p.ya;
   d.m.push(p.m); d.h.push(p.h); d.vz.push(p.vz);
   d.ax.push(p.ax); d.ay.push(p.ay); d.az.push(p.az);
-  d.ro.push(p.ro); d.pi.push(p.pi); d.ya.push(p.ya);
+  d.ro.push(p.ro); d.pi.push(p.pi);                 // el yaw solo va en el CSV y el reporte
   if (d.m.length > MAX_POINTS) Object.keys(d).forEach((k) => d[k].splice(0, MAX_POINTS / 4));
   S.dirty = true;
 }
-function clearData() { Object.keys(S.d).forEach((k) => (S.d[k] = [])); prevYaw = null; S.dirty = true; }
+function clearData() { Object.keys(S.d).forEach((k) => (S.d[k] = [])); S.dirty = true; }
 
 function lowerBound(arr, x) {
   let lo = 0, hi = arr.length;
@@ -276,8 +291,7 @@ function buildCharts() {
                      { key: "ay", label: "ay (g)", color: "#34d399", dec: 2, ink: INK2, dash: [9, 4] },
                      { key: "az", label: "az (g)", color: "#60a5fa", dec: 2, ink: "#6c7893", dash: [2, 4] }]);
   makeChart("ch-att", [{ key: "ro", label: "roll (°)", color: "#f472b6", ink: INK },
-                       { key: "pi", label: "pitch (°)", color: "#fbbf24", ink: INK2, dash: [9, 4] },
-                       { key: "ya", label: "yaw (°)", color: "#a78bfa", dec: 0, ink: "#6c7893", dash: [2, 4] }]);
+                       { key: "pi", label: "pitch (°)", color: "#fbbf24", ink: INK2, dash: [9, 4] }]);
   charts.forEach(fit);
 }
 function renderCharts() {
@@ -298,7 +312,7 @@ function drawAttitude() {
   const w = Math.round(c.clientWidth * dpr), h = Math.round(c.clientHeight * dpr);
   if (!w || !h) return;
   if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
-  const p = S.last, roll = p ? p.ro : 0, pitch = p ? p.pi : 0, yaw = p ? p.ya : 0;
+  const p = S.last, roll = p ? p.ro : 0, pitch = p ? p.pi : 0;
   const cx = w / 2, cy = h / 2, Ro = Math.min(w, h) / 2 * 0.97, Ri = Ro * 0.76;
   const rad = (d) => (d * Math.PI) / 180;
   ctx.clearRect(0, 0, w, h);
@@ -315,29 +329,17 @@ function drawAttitude() {
     aro: "#e9eff6", cuerpo: "#fbbf24", halo: null, fuente: "Segoe UI, Arial",
   };
 
-  // Anillo de rumbo (yaw relativo: 0 = rumbo al arrancar)
+  // Anillo fijo de referencia (sin rumbo: el yaw no se muestra)
   ctx.save(); ctx.translate(cx, cy);
   ctx.fillStyle = P.anillo; ctx.beginPath(); ctx.arc(0, 0, Ro, 0, 7); ctx.fill();
   if (pl) { ctx.strokeStyle = INK; ctx.lineWidth = 1.5 * dpr; ctx.beginPath(); ctx.arc(0, 0, Ro - dpr, 0, 7); ctx.stroke(); }
-  ctx.rotate(rad(-yaw));
   for (let a = 0; a < 360; a += 10) {
     const major = a % 30 === 0, r1 = Ro, r2 = Ro * (major ? 0.9 : 0.94);
     ctx.strokeStyle = major ? P.tickM : P.tickm; ctx.lineWidth = major ? 2 * dpr : 1 * dpr;
     ctx.beginPath(); ctx.moveTo(Math.sin(rad(a)) * r1, -Math.cos(rad(a)) * r1);
     ctx.lineTo(Math.sin(rad(a)) * r2, -Math.cos(rad(a)) * r2); ctx.stroke();
-    if (major) {
-      const lab = { 0: "0", 90: "90", 180: "180", 270: "270" }[a] || String(a);
-      ctx.save(); ctx.translate(Math.sin(rad(a)) * Ro * 0.83, -Math.cos(rad(a)) * Ro * 0.83);
-      ctx.rotate(rad(a)); ctx.fillStyle = a === 0 ? P.cero : P.rotulo;
-      ctx.font = `${pl ? "700 " : ""}${Ro * 0.085}px ${P.fuente}`; ctx.fillText(lab, 0, 0); ctx.restore();
-    }
   }
   ctx.restore();
-  // Marca fija del rumbo
-  ctx.fillStyle = P.marca; ctx.beginPath();
-  ctx.moveTo(cx, cy - Ro * 0.99); ctx.lineTo(cx - Ro * 0.04, cy - Ro * 1.0 + Ro * 0.07);
-  ctx.lineTo(cx + Ro * 0.04, cy - Ro * 1.0 + Ro * 0.07); ctx.fill();
-
   // Horizonte artificial: gira con -roll y se desplaza con el pitch (cabeceo arriba = horizonte abajo)
   ctx.save(); ctx.translate(cx, cy);
   ctx.beginPath(); ctx.arc(0, 0, Ri, 0, 7); ctx.clip();
@@ -510,6 +512,7 @@ document.addEventListener("keydown", (e) => {
   if (e.ctrlKey || e.altKey || e.metaKey) return;
   if (e.key === "v" || e.key === "V") setVideo(!document.body.classList.contains("video"));
   else if (e.key === "p" || e.key === "P") setPaused(!S.paused);
+  else if (e.key === "d" || e.key === "D") setDetalle(!S.detalle);
   else if (e.key === "t" || e.key === "T") setTheme(isPlano() ? "clasico" : "plano", true);
 });
 window.addEventListener("resize", () => setTimeout(() => charts.forEach(fit), 50));
@@ -521,6 +524,7 @@ att.c = $("att"); att.ctx = att.c.getContext("2d");
 const qs = new URLSearchParams(location.search);   // ?video=1 abre en modo pantalla de video
 if (qs.get("video") === "1" || (qs.get("video") === null && lsGet("hellmary_video") === "1")) setVideo(true);
 setBandText();
+setDetalle(lsGet("hellmary_detalle") === "1");     // por defecto apagado
 updateTimeline();
 connect();
 drawLoop();

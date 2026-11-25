@@ -173,3 +173,17 @@ body.video .ghost { opacity: .2; }
 
 @keyframes blink { 50% { opacity: .35; } }
 @keyframes pulse { 50% { box-shadow: 0 0 1.4rem rgba(248,113,113,.75); } }
+
+/* ---------- modo detalle (tecla D) y simplificaciones ---------- */
+.det { display: none !important; }
+body.detalle .det { display: revert !important; }
+body.detalle .mini.det { display: grid !important; }
+.attnum { grid-template-columns: repeat(3, 1fr); }
+#m-sig.debil { color: var(--bad); }
+#techstats[hidden] { display: none; }
+/* con el modo detalle el encabezado lleva más datos: se compacta para que nada se corte */
+body.detalle #top { gap: .8rem; }
+body.detalle .linkbox { gap: .55rem; }
+body.detalle .mini b { font-size: 1.15rem; }
+body.detalle .title { letter-spacing: .04em; }
+body.detalle .clock b { font-size: 2rem; }

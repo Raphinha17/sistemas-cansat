@@ -202,3 +202,23 @@ def test_tema_plano_sin_red(tmp_path):
         assert "hellmary_tema" in js and 'e.key === "t"' in js
     for f in (html, css.text, js):
         assert not re.search(r"https?://(?!127\.0\.0\.1)", f.replace("http://www.w3.org", ""))
+
+
+def test_interfaz_simplificada(tmp_path):
+    """Textos nuevos de la interfaz: banderas renombradas, sin yaw ni datos técnicos a la
+    vista, modo detalle (D) y umbrales de la señal en un solo lugar."""
+    st, app = _client(tmp_path)
+    with app as c:
+        html, js = c.get("/").text, c.get("/static/app.js").text
+        hello = None
+        with c.websocket_connect("/ws") as ws:
+            hello = json.loads(ws.receive_text())
+    nombres = [f["text"] for f in hello["flags"]]
+    assert nombres == ["Sistema listo", "Suelta detectada", "Separación activada",
+                       "Separación de respaldo", "Aterrizaje", "Falla sensor de altura",
+                       "Falla sensor de movimiento", "NO LISTO"]
+    assert "YAW" not in html and "yaw relativo" not in html and "prom. 1 s" not in html
+    assert "(p0)" not in html and 'id="s-p"' not in html and "Descenso ideal: 8 a 12 m/s" in html
+    assert 'id="m-sig"' in html and 'class="mini det"' in html      # RSSI/SNR solo en detalle
+    assert js.count("const SENAL =") == 1 and "hellmary_detalle" in js and 'e.key === "d"' in js
+    assert "ya:" not in js.split("/* ---------------- gráficas")[0]   # el yaw no se grafica

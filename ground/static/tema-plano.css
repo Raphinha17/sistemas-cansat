@@ -171,3 +171,4 @@ html.t-plano #banner.warn { background: var(--alert); color: var(--ink); }
 /* modo video: se conserva el tema; el logo sigue visible */
 html.t-plano body.video .ghost { opacity: .35; }
 html.t-plano body.video #logo { height: 3.5rem; max-width: 14rem; }
+html.t-plano #m-sig.debil { background: var(--alert); color: var(--ink); padding: 0 .3rem; }

@@ -54,6 +54,21 @@ disponible, la interfaz lo avisa y el servidor reintenta cada 2 s.
   el zoom del navegador al 100 % (F11 para pantalla completa).
 - **Reiniciar**: borra estadísticas, gráficas y eventos de la pantalla (no los archivos).
 
+## Modo detalle (tecla D)
+Por defecto la pantalla es sencilla: el encabezado dice «Estación terrena» (con «SIMULADO» si es
+`--sim`; el puerto, los baudios y el archivo van en el tooltip) y muestra **SEÑAL**
+(Buena / Regular / Débil), PÉRDIDA y PAQUETES. La tecla **D** activa el **modo detalle**, que
+agrega RSSI, SNR, la tasa de paquetes y la línea de contadores técnicos (inválidas, errores de
+radio, duplicados, reinicios de secuencia); la elección se recuerda en el navegador
+(`localStorage`, con `try/catch`). Sin modo detalle, esa línea de contadores solo aparece si
+alguno es mayor que 0. La **señal** sale del RSSI y la pérdida; los umbrales están en un solo
+lugar, la constante `SENAL` de `static/app.js`: *Débil* si RSSI < -115 dBm o pérdida > 30 %,
+*Buena* si RSSI ≥ -100 dBm y pérdida ≤ 10 %, *Regular* en lo demás. El CSV, el reporte y el
+yaw (que ya no se dibuja en el indicador ni en la gráfica) conservan todos los datos.
+Banderas: Sistema listo, Suelta detectada, Separación activada, Separación de respaldo,
+Aterrizaje, Falla sensor de altura, Falla sensor de movimiento y NO LISTO (mismos nombres en el
+registro de eventos).
+
 ## Tema visual: «plano técnico / bitácora de vuelo»
 La interfaz tiene dos temas. El **predeterminado** es el de *plano técnico*, pensado para
 usarse al aire libre a pleno sol (`static/tema-plano.css`): papel crema con rejilla sutil,
