@@ -170,6 +170,13 @@ STAT              # despliegue=B [...] > 85 m ... 80 m, estado=1, log=0/... (0 %
 `MODO`; no manda `MISION_BORRAR`.) Si el arranque dice `# REINICIO EN VUELO`, hay una
 misión guardada: `MISION_BORRAR`.
 
+### 1.4c Diagnóstico del bus de sensores (`I2C`)
+Con la placa de vuelo en los estados 0 o 1, manda `I2C`. Debe imprimir SDA/SCL en ALTO, `0x68 MPU6500`
+(o 0x69) y `0x76 BMP280` (o 0x77) en el escaneo normal, nada en el cruzado y la línea final
+`OK: IMU y BARO detectados`. Si falta algo, el veredicto da la causa probable (línea en BAJO =
+posible corto a GND o sin pull-up; responde solo el escaneo cruzado = SDA/SCL CRUZADOS). En
+vuelo responde `ERR`. Pruebas nativas: `pio test -e native -f test_i2c_diag`.
+
 ### 1.5 Estación terrena
 En **otra** terminal (con el `.venv` activado o `$PY` definido):
 ```bash
@@ -660,6 +667,7 @@ Una prueba a nivel de suelo es más exigente que el vuelo (el suelo atenúa la s
 | `sim_serial` no encuentra el puerto / "Acceso denegado" / "Device or resource busy" | Otro programa lo tiene abierto (monitor, estación): ciérralo. |
 | Linux: "Permission denied" en `/dev/ttyUSB*` | Tu usuario no está en el grupo del puerto: `sudo usermod -aG uucp $USER` (Arch; en Debian/Ubuntu `dialout`) y vuelve a iniciar sesión. |
 | La placa no responde a `SIM_INICIO` | Espera 3 s tras abrir el puerto (puede reiniciarse); usa `--espera 4`. |
+| `STAT` dice `imu_err`/`baro_err` crecientes o la banderas 5/6 | Manda `I2C` y sigue su veredicto (cableado, 3V3/GND, SDA/SCL cruzados). |
 | `ERR hay una mision en curso` | `MISION_BORRAR` (la placa reinicia) y repite. |
 | La placa no pasa a ASCENSO en un ascenso real | Ver `STAT`: `p0_pausa=1` al levantarla es lo normal. Debe subir > 20 m a > 1 m/s durante 3 s (P57). |
 | La estación dice "ESPERANDO DATOS" en la simulación | En modo simulación la placa **no transmite** hasta la primera línea `SIM`; empieza `sim_serial`. |

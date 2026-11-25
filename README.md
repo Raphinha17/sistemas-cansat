@@ -189,6 +189,7 @@ Si la pantalla no está o no responde, el firmware funciona igual (el arranque i
 | Comando | Efecto |
 |---|---|
 | `MODO [A\|B\|C]` | muestra el modo de despliegue, o lo cambia |
+| `I2C` | diagnóstico del bus de sensores (solo estados 0 y 1): nivel de SDA 41 / SCL 42, escaneo normal y cruzado y veredicto |
 | `STAT` | estadísticas y estado actual |
 | `BORRAR` | vacía el log interno |
 | `DUMP` | vuelca el log interno en hexadecimal |

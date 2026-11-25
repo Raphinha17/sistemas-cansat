@@ -32,6 +32,8 @@
 //   BORRAR        borra el log
 //   MISION        muestra el registro de misión guardado en NVS
 //   MISION_BORRAR borra el registro de misión y reinicia la placa
+//   I2C           diagnostico del bus de sensores (estados 0 y 1): reposo de SDA/SCL, escaneo
+//                 normal y cruzado y veredicto; restaura el bus al terminar
 //   MODO          muestra el modo de despliegue; MODO A|B|C|D lo cambia (estados 0 y 1)
 //   SIM_INICIO    entra al modo simulación (o lo reinicia de cero) sin esperar sensores
 //   SIM_FIN       sale del modo simulación (vuelve a los sensores y recalibra)
@@ -74,6 +76,9 @@ static volatile bool req_demo_arm = false, req_demo_disarm = false;
 static volatile int8_t req_mode = -1;  // DeployMode pedido por el comando MODO (-1: nada)
 static volatile bool sim_mode = false;
 static volatile bool req_flush = false;
+// Diagnóstico I2C: comms pide pausa, control confirma (deja de leer sensores y reutiliza la
+// última muestra para que el estado de vuelo no cambie) y comms usa el bus.
+static volatile bool i2c_pause_req = false, i2c_paused = false;
 
 // Publicado por control para comms (diagnóstico y avisos por serial)
 static volatile uint8_t pub_state = ST_AUTOPRUEBA, pub_flags = 0;
@@ -165,6 +170,19 @@ static void controlTask(void *) {
       vTaskDelayUntil(&last_wake, period);
       t0 = micros();
       in.t_ms = millis();
+      i2c_paused = i2c_pause_req;
+      if (i2c_paused) {
+        // Bus cedido al diagnóstico: se reutiliza la última muestra (solo estados 0 y 1).
+        in.imu_valid = !core.imuDead();
+        for (int i = 0; i < 3; i++) {
+          in.acc_g[i] = imu.acc_g[i];
+          in.gyro_dps[i] = imu.gyro_dps[i];
+        }
+        in.baro_sampled = !core.baroDead() && (cycle % BARO_DECIM) == 0;
+        in.baro_valid = in.baro_sampled;
+        in.p_pa = baro.p_pa;
+        in.temp_c = baro.temp_c;
+      } else {
       if (!core.imuDead()) {
         in.imu_valid = sensors.readImu(imu);
         if (in.imu_valid) {
@@ -185,6 +203,7 @@ static void controlTask(void *) {
         } else {
           st_baro_err++;
         }
+      }
       }
     }
 
@@ -404,6 +423,20 @@ static bool handleCommand(const String &cmd) {
     Serial.flush();
     delay(100);
     ESP.restart();
+  } else if (cmd == "I2C") {
+    if (pub_state > ST_TIERRA || sim_mode || req_sim_on) {
+      Serial.println("ERR I2C solo en los estados 0 y 1 (en tierra) y fuera del modo simulacion");
+    } else {
+      i2c_pause_req = true;
+      const uint32_t t0 = millis();
+      while (!i2c_paused && millis() - t0 < 200) delay(2);
+      if (!i2c_paused || pub_state > ST_TIERRA) {
+        Serial.println("ERR I2C: no se pudo ceder el bus");
+      } else {
+        i2cDiagnostico(Serial);
+      }
+      i2c_pause_req = false;
+    }
   } else if (cmd == "MODO") {
     printMode((DeployMode)pub_mode);
   } else if (cmd.startsWith("MODO ")) {
@@ -472,7 +505,7 @@ static bool handleCommand(const String &cmd) {
 }
 
 static void printHelp() {
-  Serial.println("Comandos: TX1 TX5 STAT DUMP BORRAR MISION MISION_BORRAR MISION_PRUEBA "
+  Serial.println("Comandos: TX1 TX5 STAT I2C DUMP BORRAR MISION MISION_BORRAR MISION_PRUEBA "
                  "MODO [A|B|C|D] SIM_INICIO SIM_FIN SIM_PROXIMA ARMAR DESARMAR | lineas SIM,... "
                  "(docs/sim_input.md)");
 }

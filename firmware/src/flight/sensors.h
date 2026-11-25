@@ -3,6 +3,8 @@
 
 #include <Arduino.h>
 
+void i2cDiagnostico(Print &out);  // comando I2C: SOLO con el bus libre (control en pausa)
+
 struct ImuSample {
   float acc_g[3];     // fuerza específica en g, ejes del sensor
   float gyro_dps[3];  // °/s, ejes del sensor (sin corregir sesgo)

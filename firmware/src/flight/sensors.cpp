@@ -4,6 +4,7 @@
 #include <Wire.h>
 
 #include "config.h"
+#include "i2c_diag.h"
 
 // ---------------------------------------------------------------------------
 // Registros del MPU6500 (hoja de datos / mapa de registros de InvenSense)
@@ -106,4 +107,52 @@ bool Sensors::readBaro(BaroSample &s) {
   s.temp_c = bmp.readTemperature();
   s.p_pa = bmp.readPressure();
   return !isnan(s.p_pa) && s.p_pa > 0;
+}
+
+// ---------------------------------------------------------------------------
+// Diagnóstico del bus (comando I2C). Quien lo llame debe garantizar que nadie más usa Wire.
+// ---------------------------------------------------------------------------
+static I2cEscaneo escanea(Print &out, int sda, int scl) {
+  I2cEscaneo e;
+  Wire.end();
+  Wire.begin(sda, scl, I2C_CLOCK_HZ);
+  Wire.setTimeOut(10);
+  for (uint8_t a = I2C_DIR_MIN; a <= I2C_DIR_MAX; a++) {
+    Wire.beginTransmission(a);
+    if (Wire.endTransmission() == 0) {
+      e.agrega(a);
+      out.printf("  0x%02X %s\n", a, i2cNombre(a));
+    }
+  }
+  if (e.n == 0) out.println("  (nada responde)");
+  return e;
+}
+
+void i2cDiagnostico(Print &out) {
+#if (PIN_I2C_SDA >= 0) && (PIN_I2C_SCL >= 0)
+  Wire.end();
+  pinMode(PIN_I2C_SDA, INPUT_PULLUP);
+  pinMode(PIN_I2C_SCL, INPUT_PULLUP);
+  delay(5);
+  const bool sda = digitalRead(PIN_I2C_SDA), scl = digitalRead(PIN_I2C_SCL);
+  out.printf("I2C reposo: SDA(%d)=%s SCL(%d)=%s\n", PIN_I2C_SDA, sda ? "ALTO" : "BAJO",
+             PIN_I2C_SCL, scl ? "ALTO" : "BAJO");
+  if (!sda || !scl) out.println("  posible corto a GND o linea sin pull-up");
+
+  out.printf("I2C escaneo normal (SDA=%d SCL=%d):\n", PIN_I2C_SDA, PIN_I2C_SCL);
+  const I2cEscaneo normal = escanea(out, PIN_I2C_SDA, PIN_I2C_SCL);
+  out.printf("I2C escaneo cruzado (SDA=%d SCL=%d):\n", PIN_I2C_SCL, PIN_I2C_SDA);
+  const I2cEscaneo cruzado = escanea(out, PIN_I2C_SCL, PIN_I2C_SDA);
+  if (cruzado.n > 0) out.println("  AVISO: responde algo con SDA/SCL invertidos: posible SDA/SCL CRUZADOS");
+
+  char v[160];
+  i2cVeredicto(normal, cruzado, sda, scl, v, sizeof v);
+  out.println(v);
+
+  Wire.end();  // restaura la configuración normal del bus
+  Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL, I2C_CLOCK_HZ);
+  Wire.setTimeOut(50);  // valor por defecto de Arduino-ESP32
+#else
+  out.println("ERR pines I2C pendientes");
+#endif
 }

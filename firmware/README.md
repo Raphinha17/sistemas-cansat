@@ -145,7 +145,7 @@ p0 en TIERRA: el promedio móvil solo toma muestras con el CanSat quieto en el s
 lento de dron no lo arrastre (`STAT`: `p0_pausa=1`). P57.
 
 ## Comandos serial (115200)
-`TX1` (según el estado, por defecto), `TX5` (5 Hz en tierra, pruebas), `STAT`, `DUMP`
+`TX1` (según el estado, por defecto), `TX5` (5 Hz en tierra, pruebas), `STAT`, `I2C` (diagnóstico del bus de sensores, solo estados 0 y 1: nivel en reposo de SDA 41 / SCL 42 con pull-up, escaneo 0x08–0x77 normal y con SDA/SCL cruzados, y un veredicto «OK: IMU y BARO detectados» o la causa probable; el control reutiliza la última muestra durante el escaneo, no cambia el estado, y el bus se restaura al terminar), `DUMP`
 (log en hex), `BORRAR`, `MISION` (registro de NVS), `MISION_BORRAR` (borra la misión y
 reinicia), `MISION_PRUEBA` (guarda una misión FALSA en curso, para probar el reinicio en
 vuelo sin volar), `MODO [A|B|C|D]`, `SIM_INICIO` (entra al modo simulación, o lo reinicia de
