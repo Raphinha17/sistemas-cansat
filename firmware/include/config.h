@@ -45,6 +45,18 @@
 #define PIN_BOTON_PRG 0                 // activo en bajo (pull-up en la placa)
 #define PIN_LED_PLACA 35
 
+// Pantalla OLED de la Heltec Wireless Stick V3: panel de 0.49" con 64x32 píxeles visibles,
+// centrado en las 128 columnas del SSD1306 (desplazamiento horizontal de 32 columnas; la
+// librería Adafruit SSD1306 lo aplica sola para un panel de 64 de ancho: columna 0x20).
+// Pines (variant heltec_wifi_lora_32_V3): SDA_OLED 17, SCL_OLED 18, RST_OLED 21, Vext 36.
+#define OLED_ANCHO 64
+#define OLED_ALTO 32
+#define OLED_DESPLAZ_X 32
+#define OLED_FUENTE_ANCHO 6     // fuente 6x8 de Adafruit GFX (tamaño 1)
+#define OLED_FUENTE_ALTO 8
+#define OLED_COLUMNAS (OLED_ANCHO / OLED_FUENTE_ANCHO)  // 10 caracteres por línea
+#define OLED_FILAS (OLED_ALTO / OLED_FUENTE_ALTO)       // 4 líneas
+
 // ENTORNO DE BANCO (heltec_banco, define CANSAT_BANCO): modo DEMO_SEPARACION y sin
 // medición de batería (BATT_ADC_ENABLED forzado a 0; el paquete reporta batería 0).
 // *** NUNCA USAR heltec_banco PARA VUELO: es el firmware del modo demo y no mide la pila.

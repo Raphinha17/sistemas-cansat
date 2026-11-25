@@ -171,14 +171,18 @@ demo/banco no cambia (su LED tiene otro significado y no usa la pantalla).
 | 2 a 5 (ASCENSO, CAIDA, DESPLIEGUE, DESCENSO) | apagado |
 | 6 ATERRIZADO | un destello por segundo |
 
-**Pantalla de la placa de vuelo** (OLED 128x64; se actualiza a 2 Hz como máximo y **solo en los
-estados 0, 1 y 6**: al entrar en vuelo se apaga y no se escribe más): nombre y modo de
-despliegue (`HELLMARY  MODO B`), estado, **GO** o **NO-GO** en grande (NO-GO = fallo de
-barómetro, de IMU o NO-GO; se ve en vídeo inverso), `IMU OK/FALLA  BARO OK/FALLA` y los
-paquetes enviados (`TX n`). **Pantalla de `rx_station`:** paquetes recibidos, RSSI, SNR,
-último estado recibido, altura y «ÚLTIMO HACE n s» (o **SIN ENLACE** si pasan más de 5 s o
-aún no llega nada). Si la pantalla no está o no responde, el firmware funciona igual (el
-arranque imprime `OLED no responde`).
+**Pantallas OLED** (Heltec Wireless Stick V3: panel de 0.49" con **64x32 píxeles visibles**, 10
+caracteres por línea y 4 líneas; se actualizan a 2 Hz como máximo):
+- **Placa de vuelo** (solo en los estados 0, 1 y 6; al entrar en vuelo se apaga y no se escribe
+  más): **GO** o **NO-GO** en letra grande (NO-GO, en vídeo inverso, si hay fallo de barómetro,
+  de IMU o NO-GO), `MODO B  S1` (modo de despliegue y número de estado) e `I:OK B:OK` (I =
+  IMU, B = barómetro; `NO` si falla).
+- **`rx_station`:** `RX 123` (paquetes recibidos), `-45/12dB` (RSSI en dBm / SNR en dB),
+  `ST1 H0.0m` (último estado y altura) y `ULT 2s` (segundos desde el último paquete); si
+  pasan más de 5 s, o aún no llega nada, **SIN ENLACE** en vídeo inverso.
+
+Si la pantalla no está o no responde, el firmware funciona igual (el arranque imprime
+`OLED no responde`).
 
 ## Comandos de la placa (serial, 115200 baudios)
 

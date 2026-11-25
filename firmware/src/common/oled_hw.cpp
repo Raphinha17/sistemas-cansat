@@ -5,8 +5,13 @@
 #include <Arduino.h>
 #include <Wire.h>
 
-static constexpr int W = 128, H = 64;
-static Adafruit_SSD1306 disp(W, H, &Wire1, RST_OLED, 400000UL, 400000UL);
+// Pines del variant (heltec_wifi_lora_32_V3 = los de la Wireless Stick V3)
+static_assert(SDA_OLED == 17 && SCL_OLED == 18 && RST_OLED == 21 && Vext == 36,
+              "pines de la OLED distintos de los esperados");
+// La librería, con un panel de 64 de ancho, empieza en la columna 0x20 (= desplazamiento 32)
+static_assert(OLED_ANCHO == 64 && OLED_ALTO == 32 && OLED_DESPLAZ_X == 32,
+              "Adafruit SSD1306 solo aplica el desplazamiento de 32 columnas en un panel 64x32");
+static Adafruit_SSD1306 disp(OLED_ANCHO, OLED_ALTO, &Wire1, RST_OLED, 400000UL, 400000UL);
 static bool ok = false;
 
 namespace oled {
@@ -40,44 +45,23 @@ void on() {
   disp.ssd1306_command(SSD1306_DISPLAYON);
 }
 
-static void texto(int x, int y, const char *s, int tam = 1) {
-  disp.setTextSize(tam);
-  disp.setCursor(x, y);
-  disp.print(s);
-}
-
-void drawFlight(const PantallaVuelo &p) {
+void draw(const Pantalla &p) {
   if (!ok) return;
   disp.clearDisplay();
-  disp.setTextColor(SSD1306_WHITE);
-  texto(0, 0, p.titulo);
-  texto(0, 10, p.estado);
-  // GO / NO-GO en grande; NO-GO en vídeo inverso para que se note
-  const int w = (int)strlen(p.go) * 18;
-  if (!p.go_ok) {
-    disp.fillRect(0, 20, W, 26, SSD1306_WHITE);
-    disp.setTextColor(SSD1306_BLACK);
+  for (uint8_t i = 0; i < p.n; i++) {
+    const Texto &t = p.t[i];
+    const int w = (int)strlen(t.s) * OLED_FUENTE_ANCHO * t.tam;
+    if (t.invertido) {
+      // Fondo blanco del ancho del texto (en SIN ENLACE / NO-GO: bien visible)
+      const int x0 = (t.tam == 1 && t.x == 0) ? 0 : t.x - 1;
+      disp.fillRect(x0 < 0 ? 0 : x0, t.y, w + 2 > OLED_ANCHO ? OLED_ANCHO : w + 2,
+                    OLED_FUENTE_ALTO * t.tam, SSD1306_WHITE);
+    }
+    disp.setTextColor(t.invertido ? SSD1306_BLACK : SSD1306_WHITE);
+    disp.setTextSize(t.tam);
+    disp.setCursor(t.x, t.y);
+    disp.print(t.s);
   }
-  texto((W - w) / 2, 22, p.go, 3);
-  disp.setTextColor(SSD1306_WHITE);
-  texto(0, 48, p.sensores);
-  texto(0, 57, p.tx);
-  disp.display();
-}
-
-void drawRx(const PantallaRx &p) {
-  if (!ok) return;
-  disp.clearDisplay();
-  disp.setTextColor(SSD1306_WHITE);
-  texto(0, 0, p.titulo);
-  texto(0, 12, p.enlace);
-  texto(0, 24, p.estado);
-  texto(0, 36, p.altura);
-  if (p.sin_enlace) {
-    disp.fillRect(0, 50, W, 14, SSD1306_WHITE);
-    disp.setTextColor(SSD1306_BLACK);
-  }
-  texto(2, 53, p.ultimo, 1);
   disp.display();
 }
 

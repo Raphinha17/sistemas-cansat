@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 
+#include "config.h"
 #include "packet.h"
 
 // ---------------------------------------------------------------------------
@@ -21,40 +22,41 @@ bool ledOn(uint8_t estado, uint8_t banderas, uint32_t t_ms);
 bool hayFallo(uint8_t banderas);
 
 // ---------------------------------------------------------------------------
-// Pantalla OLED 128x64 del firmware de vuelo: solo en AUTOPRUEBA, TIERRA y ATERRIZADO;
-// en vuelo (2 a 5) se apaga y no se escribe.
+// Pantallas OLED de 64x32 píxeles visibles (Wireless Stick V3), fuente 6x8: 10 caracteres por
+// línea y 4 líneas. Cada pantalla es una lista de textos con posición y tamaño; el dibujo
+// real (src/common/oled_hw.cpp) los pinta tal cual. Los textos nunca pasan de OLED_COLUMNAS
+// caracteres (a tamaño 1) y todo cae dentro del área visible (probado en native).
+// Firmware de vuelo: solo en los estados 0, 1 y 6; en vuelo se apaga y no se escribe.
 // ---------------------------------------------------------------------------
 bool oledActiva(uint8_t estado);
 
 const char *nombreEstado(uint8_t estado);
 
-struct PantallaVuelo {
-  char titulo[32];    // "HELLMARY  MODO B"
-  char estado[32];    // "EST 1 TIERRA"
-  char go[8];         // "GO" o "NO-GO" (se dibuja en grande)
-  bool go_ok;
-  char sensores[32];  // "IMU OK  BARO OK"
-  char tx[32];        // "TX 123"
+struct Texto {
+  int8_t x, y;       // esquina superior izquierda (píxeles)
+  uint8_t tam;       // 1 = 6x8, 2 = 12x16
+  bool invertido;    // texto negro sobre fondo blanco (un rectángulo del ancho del texto)
+  char s[OLED_COLUMNAS + 1];
 };
 
-// modo: 'A'..'D'. enviados: paquetes de telemetría enviados.
-void pantallaVuelo(uint8_t estado, uint8_t banderas, char modo, uint32_t enviados,
-                   PantallaVuelo &out);
+struct Pantalla {
+  Texto t[6];
+  uint8_t n = 0;
+};
+
+// Pantalla del firmware de vuelo. modo: 'A'..'D'.
+//   GO / NO-GO grande (NO-GO = banderas 5, 6 o 7), "MODO B  S1" y "I:OK B:OK"
+//   (I = IMU, B = barómetro; "I:NO" si falla).
+void pantallaVuelo(uint8_t estado, uint8_t banderas, char modo, Pantalla &out);
 
 // ---------------------------------------------------------------------------
-// Pantalla OLED de rx_station
+// Pantalla de rx_station
 // ---------------------------------------------------------------------------
 constexpr uint32_t RX_SIN_ENLACE_MS = 5000;
 
-struct PantallaRx {
-  char titulo[32];   // "RX PAQ 123"
-  char enlace[32];   // "RSSI -45.5 SNR 9.8" o "SIN ENLACE"
-  char estado[32];   // "EST 2 ASCENSO"
-  char altura[32];   // "ALT 123.4 m"
-  char ultimo[32];   // "ULTIMO HACE 2 s" o "SIN ENLACE"
-  bool sin_enlace;
-};
-
-// hay_paquete = ya se recibió alguno. desde_ultimo_ms = ms desde el último paquete.
+//   "RX 123"       paquetes recibidos
+//   "-45/12dB"     RSSI (dBm) / SNR (dB)
+//   "ST1 H0.0m"    último estado y altura
+//   "ULT 2s"       segundos desde el último paquete, o "SIN ENLACE" (> 5 s o sin paquetes)
 void pantallaRx(uint32_t recibidos, bool hay_paquete, float rssi, float snr, uint8_t estado,
-                float altura_m, uint32_t desde_ultimo_ms, PantallaRx &out);
+                float altura_m, uint32_t desde_ultimo_ms, Pantalla &out);

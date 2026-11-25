@@ -66,8 +66,12 @@ scripts/     scripts de PlatformIO
 Solo `heltec_wifi_lora_32_V3` y `rx_station` (en `heltec_demo`/`heltec_banco` el LED conserva
 su patrón de la cuenta regresiva y no hay pantalla). La lógica es pura y está en
 `lib/indicadores` (probada en native: `test_indicadores`); el manejo de la pantalla en
-`src/common/oled_hw.*` (Adafruit SSD1306 + GFX sobre `Wire1`, pines `SDA_OLED`, `SCL_OLED`,
-`RST_OLED` y `Vext` del variant; Vext en LOW alimenta la OLED). El LED y la pantalla se
+`src/common/oled_hw.*` (Adafruit SSD1306 + GFX sobre `Wire1`; pines `SDA_OLED` 17, `SCL_OLED` 18, `RST_OLED` 21 y
+`Vext` 36 del variant, verificados con `static_assert`; Vext en LOW alimenta la OLED). El
+panel es el de 0.49" de la Wireless Stick V3: **64x32 píxeles visibles** centrados en las
+128 columnas del SSD1306 (`OLED_ANCHO`, `OLED_ALTO` y `OLED_DESPLAZ_X` = 32 en `config.h`;
+la librería aplica el desplazamiento al usar un panel de 64 de ancho). Antes se dibujaba
+para 128x64 y el texto se cortaba por la izquierda. El LED y la pantalla se
 manejan en la tarea `comms` (núcleo 0); el lazo de control de 100 Hz no participa.
 
 | Estado de la placa | LED (GPIO35) |
@@ -78,12 +82,15 @@ manejan en la tarea `comms` (núcleo 0); el lazo de control de 100 Hz no partici
 | 2 a 5 (ASCENSO, CAIDA, DESPLIEGUE, DESCENSO) | apagado |
 | 6 ATERRIZADO | un destello por segundo |
 
-Pantalla de vuelo (≤ 2 Hz, solo estados 0, 1 y 6; en 2 a 5 se manda un único
-`DISPLAYOFF` al entrar y no se vuelve a escribir): `HELLMARY  MODO x`, `EST n NOMBRE`,
-GO/NO-GO grande (NO-GO si las banderas 5, 6 o 7 están en 1), `IMU .. BARO ..` y `TX n`.
-Pantalla de `rx_station` (2 Hz): `RX PAQ n`, `RSSI .. SNR ..`, `EST n NOMBRE`, `ALT .. m` y
-`ULTIMO HACE n s` o `SIN ENLACE` (> 5 s). Sin pantalla, `oled::begin()` devuelve false (no
-responde el 0x3C), el arranque lo imprime y todo sigue sin ella.
+Texto de las pantallas (fuente 6x8: 10 caracteres por línea, 4 líneas; probado en native
+con un framebuffer de 64x32 que ningún píxel sale del área visible):
+- Vuelo (≤ 2 Hz, solo estados 0, 1 y 6; en 2 a 5 se manda un único `DISPLAYOFF` al entrar y no
+  se vuelve a escribir): `GO` / `NO-GO` en tamaño 2 (NO-GO si las banderas 5, 6 o 7 están en 1,
+  en vídeo inverso), `MODO B  S1` e `I:OK B:OK` (`NO` si falla).
+- `rx_station` (2 Hz): `RX n`, `RSSI/SNRdB` (p. ej. `-45/12dB`), `ST1 H0.0m` (altura con un
+  decimal si |h| < 10 m) y `ULT 2s`, o `SIN ENLACE` (> 5 s sin paquetes o aún sin ninguno).
+Sin pantalla, `oled::begin()` devuelve false (no responde el 0x3C), el arranque lo imprime y
+todo sigue sin ella.
 
 **Librerías con versión fija** (sin `^`, para poder compilar sin internet una vez
 descargadas en `.pio/libdeps`): RadioLib 7.8.1, Adafruit BMP280 2.6.8, Unified Sensor 1.1.15,

@@ -523,9 +523,9 @@ static void commsTask(void *) {
             oled::on();
             oled_on = true;
           }
-          PantallaVuelo pv;
-          pantallaVuelo(st, fl, deployModeChar((DeployMode)pub_mode), telemetry::sent(), pv);
-          oled::drawFlight(pv);
+          Pantalla pv;
+          pantallaVuelo(st, fl, deployModeChar((DeployMode)pub_mode), pv);
+          oled::draw(pv);
         }
       }
     }

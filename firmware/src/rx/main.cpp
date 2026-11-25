@@ -44,9 +44,9 @@ static void actualizaPantalla() {
   const uint32_t now = millis();
   if (!oled::present() || now - last_draw_ms < 500) return;  // 2 Hz como máximo
   last_draw_ms = now;
-  PantallaRx p;
+  Pantalla p;
   pantallaRx(rx_count, have_pkt, last_rssi, last_snr, last_estado, last_h, now - last_rx_ms, p);
-  oled::drawRx(p);
+  oled::draw(p);
 }
 
 void loop() {
